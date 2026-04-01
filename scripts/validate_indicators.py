@@ -40,6 +40,23 @@ def validate(symbol: str = "BTCUSDT", timeframe: str = "1h", bars: int = 100):
         logger.error("Failed to fetch data")
         return
 
+    # ── DEBUG: DataFrame Info ─────────────────────────────────────────────
+    logger.info(f"DataFrame shape: {df.shape}")
+    logger.info(f"Columns: {df.columns.tolist()}")
+    logger.info(f"Sample data:\n{df[['high','low','close']].tail(5).to_string()}")
+
+    from src.indicators.helpers import find_swing_highs, find_swing_lows
+    sh = find_swing_highs(df, size=5)
+    sl = find_swing_lows(df, size=5)
+    logger.info(f"Swing highs (size=5): {sh.sum()}")
+    logger.info(f"Swing lows  (size=5): {sl.sum()}")
+    sh2 = find_swing_highs(df, size=10)
+    sl2 = find_swing_lows(df, size=10)
+    logger.info(f"Swing highs (size=10): {sh2.sum()}")
+    logger.info(f"Swing lows  (size=10): {sl2.sum()}")
+    logger.info("")
+    # ── END DEBUG ─────────────────────────────────────────────────────────
+
     # Take only last N bars
     df = df.tail(bars).reset_index(drop=True)
 
@@ -67,7 +84,7 @@ def validate(symbol: str = "BTCUSDT", timeframe: str = "1h", bars: int = 100):
     # Order Blocks
     logger.info("Detecting Order Blocks...")
     try:
-        obs = detect_order_blocks(df, lookback=50)
+        obs = detect_order_blocks(df)
 
         logger.info(f"Total Order Blocks detected: {len(obs)}")
         logger.info("")
@@ -124,7 +141,7 @@ def validate(symbol: str = "BTCUSDT", timeframe: str = "1h", bars: int = 100):
     # BOS/CHOCH
     logger.info("Detecting BOS/CHOCH signals...")
     try:
-        signals = detect_bos_choch(df, lookback=50)
+        signals = detect_bos_choch(df)
 
         logger.info(f"Total BOS/CHOCH signals detected: {len(signals)}")
         logger.info("")
