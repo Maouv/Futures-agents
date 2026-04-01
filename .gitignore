@@ -1,0 +1,30 @@
+# Secrets
+.env
+*.env
+
+# Database
+data/
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+dist/
+build/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+logs/
+
+# RL Models (Phase 7)
+data/rl_models/

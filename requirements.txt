@@ -1,0 +1,68 @@
+# ==========================================
+# CORE TRADING & DATA ENGINE
+# ==========================================
+ccxt==4.2.86              # Universal crypto API (Mendukung binanceusdm() REST)
+pandas>=2.3.2             # Manipulasi data OHLCV & Indikator (minimal 2.3.2 untuk pandas-ta)
+numpy                     # Komputasi matematika cepat (Vectorization) - version resolved by pandas
+ta==0.11.0                # Library Technical Analysis standar (RSI, ATR, dll)
+pandas-ta                 # Tambahan indikator (jika diperlukan saat porting LuxAlgo)
+
+# ==========================================
+# DATABASE & ORM
+# ==========================================
+sqlalchemy==2.0.31        # ORM untuk mengelola SQLite (Paper Trade DB)
+aiosqlite==0.20.0         # Driver async SQLite (Dibutuhkan oleh Telegram Bot agar tidak blocking)
+
+# ==========================================
+# SCHEDULING & INFRASTRUCTURE
+# ==========================================
+apscheduler==3.10.4       # Job scheduler utama (Loop 15 menit)
+loguru==0.7.2             # Logging yang jauh lebih baik dari print() atau logging bawaan
+
+# ==========================================
+# TELEGRAM INTERFACE
+# ==========================================
+python-telegram-bot==21.5 # Framework Telegram Bot (Async, stabil, mendukung handler kompleks)
+
+# ==========================================
+# LLM API CLIENTS (COGNITIVE LAYER)
+# ==========================================
+openai==1.40.0            # Universal SDK (Digunakan untuk Cerebras DAN Groq karena kompatibel OpenAI standard)
+# modal SDK tidak dibutuhkan — GLM-5 diakses via HTTP endpoint (MODAL_BASE_URL di .env)
+# menggunakan openai SDK yang sudah ada di atas
+
+# ==========================================
+# CONFIGURATION & VALIDATION
+# ==========================================
+pydantic==2.8.2           # Validasi data (Pydantic Models untuk antar Agent)
+pydantic-settings==2.3.4  # Mengambil & memvalidasi variabel dari file .env
+python-dotenv==1.0.1      # Loader file .env
+
+# ==========================================
+# NETWORKING (ON-CHAIN & FALLBACK)
+# ==========================================
+httpx==0.27.0             # HTTP Client modern (Untuk fetch DefiLlama / On-chain data)
+websockets==12.0          # Library WS murni Python (Phase 8: User Data Stream — bukan market data)
+
+# ==========================================
+# REINFORCEMENT LEARNING (PHASE 7 - COLAB ONLY, BUKAN VPS)
+# ==========================================
+# ⚠️ CATATAN UNTUK CLAUDE CODE:
+# JANGAN install 3 package di bawah ini di VPS trading.
+# Alur Phase 7:
+#   1. Export data/trading.db → CSV dari VPS
+#   2. Upload CSV ke Google Colab (gratis, GPU T4)
+#   3. Training PPO di Colab (bukan di VPS)
+#   4. Download model .zip dari Colab
+#   5. Upload model ke VPS: data/rl_models/best_model.zip
+#   6. Bot baca model dari path itu
+# Jika user belum sampai Phase 7, SKIP install package ini.
+# Jika user minta install di VPS, INGATKAN risiko OOM dan sarankan Colab.
+# gymnasium==0.29.1         # Install di Colab saja
+# stable-baselines3==2.3.2  # Install di Colab saja
+# torch==2.3.1              # Install di Colab saja — terlalu berat untuk VPS 8GB RAM
+
+# ==========================================
+# DEVELOPMENT & TESTING
+# ==========================================
+pytest==8.2.2             # Framework untuk menulis Unit Test (Validasi LuxAlgo di Phase 2)
