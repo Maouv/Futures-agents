@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     FUTURES_MARGIN_TYPE: str = Field(default="isolated", description="'isolated' atau 'cross'")
     FUTURES_DEFAULT_LEVERAGE: int = Field(default=10, ge=1, le=125)
 
+    # ── Trading Strategy Params ───────────────────────────────────────────────
+    RISK_PER_TRADE_USD: float = Field(default=10.0, description="Risk per trade dalam USD")
+    RISK_REWARD_RATIO: float = Field(default=2.0, description="Risk:Reward ratio (2 = 1:2)")
+
     # ── LLM: Analyst (Cerebras) ──────────────────────────────────────────────
     CEREBRAS_API_KEY: SecretStr = Field(..., description="Cerebras API Key")
     CEREBRAS_BASE_URL: HttpUrl = Field(default="https://api.cerebras.ai/v1/chat/completions")
