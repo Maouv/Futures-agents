@@ -49,10 +49,10 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: HttpUrl = Field(default="https://api.groq.com/openai/v1/chat/completions")
     GROQ_MODEL: str = Field(default="llama-3.1-8b-instant")
 
-    # ── LLM: Concierge (Modal GLM-5) ─────────────────────────────────────────
-    MODAL_TOKEN: SecretStr = Field(..., description="Modal API Token")
-    MODAL_BASE_URL: HttpUrl = Field(default="https://api.us-west-2.modal.direct/v1/chat/completions")
-    MODAL_MODEL: str = Field(default="zai-org/GLM-5-FP8")
+    # ── LLM: Concierge ──────────────────────────────────────────────────────
+    CONCIERGE_API_KEY: SecretStr = Field(..., description="API key untuk Concierge model")
+    CONCIERGE_BASE_URL: HttpUrl = Field(default="https://api.groq.com/openai/v1/chat/completions")
+    CONCIERGE_MODEL: str = Field(default="llama-3.1-8b-instant")
 
     # ── Telegram ─────────────────────────────────────────────────────────────
     TELEGRAM_BOT_TOKEN: SecretStr = Field(..., description="Telegram Bot Token")

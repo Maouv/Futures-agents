@@ -267,15 +267,8 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     logger.info(f"Fetched & stored {len(df)} candles for {symbol} {timeframe}")
 
     # ── Session Filter Flag (FR-1.3) ──────────────────────────────────────
-    now_utc = datetime.now(timezone.utc)
-    skip_trade = not is_trading_session(now_utc)
-    df.attrs["skip_trade"] = skip_trade
-
-    if skip_trade:
-        logger.info(
-            f"Session Filter: Outside trading hours (UTC {now_utc.strftime('%H:%M')}). "
-            "Data stored but SKIP_TRADE=True."
-        )
+    # TODO: Re-enable session filter sebelum go live
+    df.attrs['skip_trade'] = False  # Disabled for testing
 
     return df
 

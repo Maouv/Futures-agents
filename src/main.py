@@ -53,7 +53,7 @@ def run_trading_cycle():
         # ── 3. Math Agents ─────────────────────────────────────────────
         trend        = TrendAgent().run(df_h4)
         reversal     = ReversalAgent().run(df_h1)
-        confirmation = ConfirmationAgent().run(df_15m, reversal)
+        confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
 
         logger.info(f"Trend: {trend.bias_label} | Signal: {reversal.signal} | Confirmed: {confirmation.confirmed}")
 
@@ -65,7 +65,13 @@ def run_trading_cycle():
         if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
             if reversal.ob is not None:
                 risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
-                result = ExecutionAgent().run(SYMBOL, decision.action, risk)
+                result = ExecutionAgent().run(
+                    symbol=SYMBOL,
+                    risk_result=risk,
+                    reversal_result=reversal,
+                    trend_result=trend,
+                    confirmation_confirmed=confirmation.confirmed,
+                )
 
                 if result.action == 'OPEN':
                     asyncio.run(send_notification(

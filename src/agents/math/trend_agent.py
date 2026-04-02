@@ -45,9 +45,9 @@ class TrendAgent(BaseAgent):
             )
 
         # Detect BOS/CHOCH
-        result = detect_bos_choch(df_h4, swing_size=swing_size)
+        signals = detect_bos_choch(df_h4, swing_size=swing_size)
 
-        if not result or not result.bos_choch_signals:
+        if not signals:
             return TrendResult(
                 bias=0,
                 bias_label="RANGING",
@@ -56,7 +56,6 @@ class TrendAgent(BaseAgent):
             )
 
         # Ambil signal terakhir dalam 10 candle terakhir
-        signals = result.bos_choch_signals
         last_signal = None
 
         for sig in reversed(signals):
