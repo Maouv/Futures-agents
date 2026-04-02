@@ -146,13 +146,41 @@ class TestSMCIndicators:
         })
 
     def test_detect_order_blocks_returns_list(self):
-        """Order block detection harus return list."""
+        """Order block detection harus return tuple of two lists."""
+        from src.indicators.luxalgo_smc import detect_order_blocks, OrderBlock
+
+        df = self._make_trending_df(200)
+        internal_obs, swing_obs = detect_order_blocks(df)
+
+        assert isinstance(internal_obs, list)
+        assert isinstance(swing_obs, list)
+
+        if internal_obs:
+            assert isinstance(internal_obs[0], OrderBlock)
+        if swing_obs:
+            assert isinstance(swing_obs[0], OrderBlock)
+
+    def test_internal_ob_has_correct_type(self):
+        """Internal OB harus memiliki ob_type='internal'."""
         from src.indicators.luxalgo_smc import detect_order_blocks
 
         df = self._make_trending_df(200)
-        result = detect_order_blocks(df, swing_length=10)
+        internal_obs, _ = detect_order_blocks(df)
 
-        assert isinstance(result, list)
+        if internal_obs:
+            for ob in internal_obs:
+                assert ob.ob_type == 'internal'
+
+    def test_swing_ob_has_correct_type(self):
+        """Swing OB harus memiliki ob_type='swing'."""
+        from src.indicators.luxalgo_smc import detect_order_blocks
+
+        df = self._make_trending_df(200)
+        _, swing_obs = detect_order_blocks(df)
+
+        if swing_obs:
+            for ob in swing_obs:
+                assert ob.ob_type == 'swing'
 
     def test_detect_fvg_returns_list(self):
         """FVG detection harus return list."""
@@ -168,7 +196,7 @@ class TestSMCIndicators:
         from src.indicators.luxalgo_smc import detect_bos_choch
 
         df = self._make_trending_df(200)
-        result = detect_bos_choch(df, swing_length=10)
+        result = detect_bos_choch(df, swing_size=10)
 
         assert isinstance(result, list)
 
@@ -181,7 +209,8 @@ class TestSMCIndicators:
             high=105.0,
             low=100.0,
             bias=-1,
-            mitigated=False
+            mitigated=False,
+            ob_type='internal'
         )
 
         assert ob.index == 10
@@ -189,6 +218,7 @@ class TestSMCIndicators:
         assert ob.low == 100.0
         assert ob.bias == -1
         assert ob.mitigated is False
+        assert ob.ob_type == 'internal'
 
     def test_fvg_structure(self):
         """Test FairValueGap model structure."""

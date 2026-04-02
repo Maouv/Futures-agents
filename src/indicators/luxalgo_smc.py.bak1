@@ -67,7 +67,7 @@ def _ensure_volume(df: pd.DataFrame) -> pd.DataFrame:
 
 def detect_order_blocks(
     df: pd.DataFrame,
-    swing_length: int = 5,
+    swing_length: int = 50,
 ) -> list[OrderBlock]:
     df = _ensure_volume(df)
     swing_hl = _smc.swing_highs_lows(df, swing_length=swing_length)
@@ -112,7 +112,7 @@ def detect_fvg(df: pd.DataFrame) -> list[FairValueGap]:
 
 def detect_bos_choch(
     df: pd.DataFrame,
-    swing_length: int = 10,
+    swing_length: int = 50,
 ) -> list[BOSCHOCHSignal]:
     swing_hl = _smc.swing_highs_lows(df, swing_length=swing_length)
     bc_df    = _smc.bos_choch(df, swing_hl)
@@ -138,12 +138,11 @@ def detect_bos_choch(
 
 def detect_all(
     df: pd.DataFrame,
-    swing_length_ob: int = 5,
-    swing_length_bos: int = 10,
+    swing_length: int = 50,
 ) -> SMCResult:
-    obs     = detect_order_blocks(df, swing_length=swing_length_ob)
+    obs     = detect_order_blocks(df, swing_length=swing_length)
     fvgs    = detect_fvg(df)
-    signals = detect_bos_choch(df, swing_length=swing_length_bos)
+    signals = detect_bos_choch(df, swing_length=swing_length)
 
     current_bias = signals[-1].bias if signals else 0
 

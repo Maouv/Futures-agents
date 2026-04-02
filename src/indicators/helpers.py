@@ -26,54 +26,45 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return atr
 
 
-def find_swing_highs(df: pd.DataFrame, size: int = 50) -> pd.Series:
+def find_swing_highs(df: pd.DataFrame, size: int = 5) -> pd.Series:
     """
-    Port dari fungsi leg() LuxAlgo PineScript.
-
-    PineScript asli:
-        newLegHigh = high[size] > ta.highest(size)
-        → high pada 'size' bar lalu LEBIH TINGGI dari highest dalam 'size' bar terakhir
-
-    Artinya: candle di posisi i adalah swing high jika
-        high[i] > max(high[i+1 .. i+size])   ← lebih tinggi dari semua candle SETELAHNYA
-        high[i] > max(high[i-size .. i-1])   ← lebih tinggi dari semua candle SEBELUMNYA
-
-    PENTING: size=50 butuh minimal 100 candle (50 kiri + 50 kanan).
-    Gunakan size=5 jika data < 200 candle untuk mendapat hasil yang reasonable.
+    Port ta.pivothigh(size, size) dari PineScript.
+    Pivot high di candle i jika:
+    - high[i] > semua high di i-size sampai i-1 (kiri)
+    - high[i] > semua high di i+1 sampai i+size (kanan)
+    Deteksi delayed — pivot di candle i baru diketahui di candle i+size.
     """
-    high           = df['high']
-    n              = len(df)
-    is_swing_high  = pd.Series(False, index=df.index)
+    high = df['high']
+    n = len(df)
+    is_swing_high = pd.Series(False, index=df.index)
 
     for i in range(size, n - size):
-        candidate      = high.iloc[i]
-        left_window    = high.iloc[i - size : i]        # size candle di kiri
-        right_window   = high.iloc[i + 1   : i + size + 1]  # size candle di kanan
-
-        if candidate > left_window.max() and candidate > right_window.max():
+        candidate = high.iloc[i]
+        left_ok  = all(candidate > high.iloc[i - size : i])
+        right_ok = all(candidate > high.iloc[i + 1 : i + size + 1])
+        if left_ok and right_ok:
             is_swing_high.iloc[i] = True
 
     return is_swing_high
 
 
-def find_swing_lows(df: pd.DataFrame, size: int = 50) -> pd.Series:
+def find_swing_lows(df: pd.DataFrame, size: int = 5) -> pd.Series:
     """
-    Port dari fungsi leg() LuxAlgo PineScript — sisi low.
-
-    Candle di posisi i adalah swing low jika
-        low[i] < min(low[i+1 .. i+size])
-        low[i] < min(low[i-size .. i-1])
+    Port ta.pivotlow(size, size) dari PineScript.
+    Pivot low di candle i jika:
+    - low[i] < semua low di i-size sampai i-1 (kiri)
+    - low[i] < semua low di i+1 sampai i+size (kanan)
+    Deteksi delayed — pivot di candle i baru diketahui di candle i+size.
     """
-    low           = df['low']
-    n             = len(df)
-    is_swing_low  = pd.Series(False, index=df.index)
+    low = df['low']
+    n = len(df)
+    is_swing_low = pd.Series(False, index=df.index)
 
     for i in range(size, n - size):
-        candidate     = low.iloc[i]
-        left_window   = low.iloc[i - size : i]
-        right_window  = low.iloc[i + 1   : i + size + 1]
-
-        if candidate < left_window.min() and candidate < right_window.min():
+        candidate = low.iloc[i]
+        left_ok  = all(candidate < low.iloc[i - size : i])
+        right_ok = all(candidate < low.iloc[i + 1 : i + size + 1])
+        if left_ok and right_ok:
             is_swing_low.iloc[i] = True
 
     return is_swing_low
