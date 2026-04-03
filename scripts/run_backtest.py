@@ -33,6 +33,12 @@ def main():
         help='Filter by year (e.g., 2024)'
     )
     parser.add_argument(
+        '--month',
+        type=int,
+        default=None,
+        help='Filter by month (1-12). If specified, --year is required.'
+    )
+    parser.add_argument(
         '--initial-balance',
         type=float,
         default=10000.0,
@@ -98,9 +104,20 @@ def main():
         sl_percent=args.sl_percent
     )
 
+    # Validate month requires year
+    if args.month is not None and args.year is None:
+        logger.error("--month requires --year to be specified")
+        sys.exit(1)
+
     # Run backtest
-    logger.info(f"Running backtest for year: {args.year or 'all years'}")
-    metrics = engine.run(year=args.year)
+    if args.month:
+        logger.info(f"Running backtest for {args.year}-{args.month:02d}")
+    elif args.year:
+        logger.info(f"Running backtest for year: {args.year}")
+    else:
+        logger.info("Running backtest for all years")
+
+    metrics = engine.run(year=args.year, month=args.month)
 
     # Print detailed results
     print("\n" + "=" * 60)

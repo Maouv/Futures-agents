@@ -109,12 +109,13 @@ class BacktestEngine:
         logger.info(f"Loaded {len(df)} candles from {path}")
         return df
 
-    def run(self, year: Optional[int] = None) -> BacktestMetrics:
+    def run(self, year: Optional[int] = None, month: Optional[int] = None) -> BacktestMetrics:
         """
         Run backtest.
 
         Args:
             year: Filter by year (optional)
+            month: Filter by month (1-12, optional). Requires year.
 
         Returns:
             BacktestMetrics hasil backtest
@@ -130,13 +131,26 @@ class BacktestEngine:
             logger.error("Failed to load required data")
             return calculate_metrics([])
 
-        # Filter by year if specified
+        # Filter by year and month if specified
         if year:
-            start_ts = int(pd.Timestamp(f"{year}-01-01").timestamp() * 1000)
-            end_ts = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
+            if month:
+                # Filter by specific month
+                start_ts = int(pd.Timestamp(f"{year}-{month:02d}-01").timestamp() * 1000)
+                # End timestamp: last day of month
+                if month == 12:
+                    end_ts = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
+                else:
+                    end_ts = int(pd.Timestamp(f"{year}-{month+1:02d}-01").timestamp() * 1000) - 1
 
-            df_h1 = df_h1[(df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)]
-            logger.info(f"Filtered H1 data: {len(df_h1)} candles for year {year}")
+                df_h1 = df_h1[(df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)]
+                logger.info(f"Filtered H1 data: {len(df_h1)} candles for {year}-{month:02d}")
+            else:
+                # Filter by full year
+                start_ts = int(pd.Timestamp(f"{year}-01-01").timestamp() * 1000)
+                end_ts = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
+
+                df_h1 = df_h1[(df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)]
+                logger.info(f"Filtered H1 data: {len(df_h1)} candles for year {year}")
 
         # Iterate setiap candle H1
         balance = self.initial_balance
@@ -152,9 +166,12 @@ class BacktestEngine:
             'signals_found': 0
         }
 
+        # Suppress all agent logs untuk mengurangi noise
+        logger.disable("src.agents.math")
+
         for i in range(100, total_candles):  # Start from 100 to have enough history
-            # Progress logging setiap 100 candle
-            if i % 100 == 0:
+            # Progress logging setiap 500 candle (lebih jarang)
+            if i % 500 == 0:
                 logger.info(f"Progress: {i}/{total_candles} candles ({i/total_candles*100:.1f}%)")
 
             current_time = df_h1['timestamp'].iloc[i]
@@ -185,22 +202,24 @@ class BacktestEngine:
             if position:
                 continue
 
-            # Get H4 data (last 50 candles)
+            # Get H4 data (extended lookback untuk BOS/CHOCH detection)
             # Map H1 to H4: 4 H1 candles = 1 H4 candle
             h1_to_h4_ratio = 4
             h4_index = i // h1_to_h4_ratio
 
-            if h4_index < 20:
+            if h4_index < 50:
                 continue
 
-            df_h4_slice = df_h4.iloc[max(0, h4_index - 50):h4_index + 1].copy()
+            # Extended from 50 to 200 for better BOS/CHOCH detection
+            df_h4_slice = df_h4.iloc[max(0, h4_index - 200):h4_index + 1].copy()
 
             # Debug: log slice info setiap 1000 candle
             if i % 1000 == 0:
                 logger.debug(f"Candle {i}: h4_index={h4_index}, H4 slice length={len(df_h4_slice)}")
 
-            # Get H1 data (last 50 candles)
-            df_h1_slice = df_h1.iloc[max(0, i - 50):i + 1].copy()
+            # Get H1 data (extended lookback untuk OB + BOS/CHOCH confluence)
+            # Extended from 50 to 100 for better signal detection
+            df_h1_slice = df_h1.iloc[max(0, i - 100):i + 1].copy()
 
             # Run TrendAgent on H4
             trend_result = self.trend_agent.run(df_h4_slice)
@@ -286,22 +305,24 @@ class BacktestEngine:
         # Calculate metrics
         metrics = calculate_metrics(self.trades)
 
-        # Print debug counters
+        # Print simplified debug summary
+        logger.info("")
         logger.info("=" * 60)
-        logger.info("DEBUG: Signal Flow Analysis")
+        logger.info("BACKTEST COMPLETED")
         logger.info("=" * 60)
-        logger.info(f"Trend ranging (skipped):     {debug_counters['trend_ranging']}")
-        logger.info(f"Reversal NONE (skipped):     {debug_counters['reversal_none']}")
-        logger.info(f"Trend mismatch (skipped):    {debug_counters['trend_mismatch']}")
-        logger.info(f"Not confirmed (skipped):     {debug_counters['not_confirmed']}")
-        logger.info(f"Signals found (passed):      {debug_counters['signals_found']}")
+        logger.info(f"Total Trades:      {metrics.total_trades}")
+        logger.info(f"Win Rate:          {metrics.win_rate:.2f}%")
+        logger.info(f"Total PnL:         {metrics.total_pnl:.2f} USDT")
+        logger.info(f"Profit Factor:     {metrics.profit_factor:.2f}")
+        logger.info(f"Max Drawdown:      {metrics.max_drawdown:.2f}%")
+        logger.info("")
+        logger.info("Signal Filters:")
+        logger.info(f"  - Trend RANGING:       {debug_counters['trend_ranging']:,}")
+        logger.info(f"  - Reversal NONE:       {debug_counters['reversal_none']:,}")
+        logger.info(f"  - Trend Mismatch:      {debug_counters['trend_mismatch']:,}")
+        logger.info(f"  - Not Confirmed:       {debug_counters['not_confirmed']:,}")
+        logger.info(f"  - Signals Passed:      {debug_counters['signals_found']:,}")
         logger.info("=" * 60)
-
-        logger.info(f"Backtest completed: {metrics.total_trades} trades")
-        logger.info(f"Win Rate: {metrics.win_rate:.2f}%")
-        logger.info(f"Total PnL: {metrics.total_pnl:.2f} USDT")
-        logger.info(f"Profit Factor: {metrics.profit_factor:.2f}")
-        logger.info(f"Max Drawdown: {metrics.max_drawdown:.2f}%")
 
         return metrics
 

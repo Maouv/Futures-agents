@@ -73,11 +73,11 @@ class ReversalAgent(BaseAgent):
                     if nearest_bear_ob is None or ob.low < nearest_bear_ob.low:
                         nearest_bear_ob = ob
 
-        # Cek BOS/CHOCH terbaru dalam 5 candle terakhir
+        # Cek BOS/CHOCH terbaru dalam 20 candle terakhir (relaxed dari 5)
         recent_signal = None
         if result.bos_choch_signals:
             last = result.bos_choch_signals[-1]
-            if last.index >= len(df_h1) - 5:
+            if last.index >= len(df_h1) - 20:  # Changed from 5 to 20
                 recent_signal = last
 
         # Tentukan sinyal
