@@ -171,11 +171,11 @@ class smc:
             current = swing_highs_lows[positions[:-1]]
             next = swing_highs_lows[positions[1:]]
 
-            highs = ohlc["high"].iloc[positions[:-1]].values
-            lows = ohlc["low"].iloc[positions[:-1]].values
+            highs = ohlc["high"].to_numpy()[positions[:-1]]
+            lows = ohlc["low"].to_numpy()[positions[:-1]]
 
-            next_highs = ohlc["high"].iloc[positions[1:]].values
-            next_lows = ohlc["low"].iloc[positions[1:]].values
+            next_highs = ohlc["high"].to_numpy()[positions[1:]]
+            next_lows = ohlc["low"].to_numpy()[positions[1:]]
 
             index_to_remove = np.zeros(len(positions), dtype=bool)
 
@@ -885,9 +885,9 @@ class smc:
                 and (start_time <= current_time or current_time <= end_time)
             ):
                 active[i] = 1
-                high[i] = max(ohlc["high"].iloc[i], high[i - 1] if i > 0 else 0)
+                high[i] = max(ohlc["high"].to_numpy()[i], high[i - 1] if i > 0 else 0)
                 low[i] = min(
-                    ohlc["low"].iloc[i],
+                    ohlc["low"].to_numpy()[i],
                     low[i - 1] if i > 0 and low[i - 1] != 0 else float("inf"),
                 )
 
@@ -934,7 +934,7 @@ class smc:
 
             if direction[i - 1] == 1:
                 current_retracement[i] = round(
-                    100 - (((ohlc["low"].iloc[i] - bottom) / (top - bottom)) * 100), 1
+                    100 - (((ohlc["low"].to_numpy()[i] - bottom) / (top - bottom)) * 100), 1
                 )
                 deepest_retracement[i] = max(
                     (
@@ -946,7 +946,7 @@ class smc:
                 )
             if direction[i] == -1:
                 current_retracement[i] = round(
-                    100 - ((ohlc["high"].iloc[i] - top) / (bottom - top)) * 100, 1
+                    100 - ((ohlc["high"].to_numpy()[i] - top) / (bottom - top)) * 100, 1
                 )
                 deepest_retracement[i] = max(
                     (

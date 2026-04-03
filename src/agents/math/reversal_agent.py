@@ -47,7 +47,7 @@ class ReversalAgent(BaseAgent):
             )
 
         # Detect semua SMC structure
-        result: SMCResult = detect_all(df_h1, swing_size=swing_size)
+        result: SMCResult = detect_all(df_h1, swing_length_ob=swing_size, swing_length_bos=swing_size)
 
         if not result:
             return ReversalResult(

@@ -54,7 +54,7 @@ class ConfirmationAgent(BaseAgent):
             )
 
         # Detect SMC di 15m
-        result = detect_all(df_15m, swing_size=swing_size)
+        result = detect_all(df_15m, swing_length_ob=swing_size, swing_length_bos=swing_size)
 
         if not result:
             return ConfirmationResult(

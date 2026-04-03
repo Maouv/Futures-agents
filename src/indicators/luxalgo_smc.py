@@ -56,7 +56,34 @@ class SMCResult(BaseModel):
 
 # ── Internal: pastikan kolom volume ada ─────────────────────────────────────
 
+def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Prepare DataFrame untuk _smc_core — reset index, pastikan RangeIndex.
+
+    Fix untuk pandas 3.0.2 compatibility:
+    - Reset index ke RangeIndex (hindari iloc return DataFrame)
+    - Lowercase semua kolom
+    - Pastikan hanya kolom OHLCV yang dikirim
+    """
+    df = df.copy()
+    df.columns = [c.lower() for c in df.columns]
+    df = df.reset_index(drop=True)
+
+    # Pastikan kolom yang diperlukan ada
+    required_cols = ['open', 'high', 'low', 'close']
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
+
+    # Tambah volume jika tidak ada
+    if 'volume' not in df.columns:
+        df['volume'] = 1000.0
+
+    return df[['open', 'high', 'low', 'close', 'volume']].copy()
+
+
 def _ensure_volume(df: pd.DataFrame) -> pd.DataFrame:
+    """Deprecated: gunakan _prepare_df() instead."""
     if "volume" not in df.columns:
         df = df.copy()
         df["volume"] = 1000.0
@@ -69,7 +96,7 @@ def detect_order_blocks(
     df: pd.DataFrame,
     swing_length: int = 5,
 ) -> list[OrderBlock]:
-    df = _ensure_volume(df)
+    df = _prepare_df(df)
     swing_hl = _smc.swing_highs_lows(df, swing_length=swing_length)
     ob_df    = _smc.ob(df, swing_hl)
 
@@ -91,6 +118,7 @@ def detect_order_blocks(
 
 
 def detect_fvg(df: pd.DataFrame) -> list[FairValueGap]:
+    df = _prepare_df(df)
     fvg_df = _smc.fvg(df)
 
     result: list[FairValueGap] = []
@@ -114,22 +142,40 @@ def detect_bos_choch(
     df: pd.DataFrame,
     swing_length: int = 10,
 ) -> list[BOSCHOCHSignal]:
+    df = _prepare_df(df)
     swing_hl = _smc.swing_highs_lows(df, swing_length=swing_length)
     bc_df    = _smc.bos_choch(df, swing_hl)
 
     result: list[BOSCHOCHSignal] = []
-    for i in range(len(bc_df)):
-        bos_val   = bc_df["BOS"].iloc[i]
-        choch_val = bc_df["CHOCH"].iloc[i]
-        level_val = bc_df["Level"].iloc[i]
 
+    # Filter rows where BOS or CHOCH != 0 (vectorized approach)
+    # Handle NaN: replace with 0 for comparison
+    bos_series = bc_df["BOS"].fillna(0)
+    choch_series = bc_df["CHOCH"].fillna(0)
+
+    signals_df = bc_df[(bos_series != 0) | (choch_series != 0)].copy()
+
+    # Iterate over filtered signals
+    for idx, row in signals_df.iterrows():
+        bos_val = row["BOS"]
+        choch_val = row["CHOCH"]
+        level_val = row["Level"]
+
+        # Check if BOS signal
         if not np.isnan(bos_val) and bos_val != 0:
             result.append(BOSCHOCHSignal(
-                index=i, type="BOS", bias=int(bos_val), level=float(level_val)
+                index=idx,
+                type="BOS",
+                bias=int(bos_val),
+                level=float(level_val)
             ))
+        # Else check if CHOCH signal
         elif not np.isnan(choch_val) and choch_val != 0:
             result.append(BOSCHOCHSignal(
-                index=i, type="CHOCH", bias=int(choch_val), level=float(level_val)
+                index=idx,
+                type="CHOCH",
+                bias=int(choch_val),
+                level=float(level_val)
             ))
 
     result.sort(key=lambda s: s.index)
