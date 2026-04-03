@@ -36,7 +36,7 @@ class BacktestMetrics(BaseModel):
     largest_loss: float      # USDT
 
 
-def calculate_metrics(trades: List[TradeResult]) -> BacktestMetrics:
+def calculate_metrics(trades: List[TradeResult], initial_balance: float = 10_000.0) -> BacktestMetrics:
     """
     Calculate performance metrics from list of trades.
 
@@ -82,7 +82,7 @@ def calculate_metrics(trades: List[TradeResult]) -> BacktestMetrics:
 
     # Calculate max drawdown
     equity_curve = []
-    equity = 0.0
+    equity = initial_balance
     for t in trades:
         equity += t.pnl
         equity_curve.append(equity)

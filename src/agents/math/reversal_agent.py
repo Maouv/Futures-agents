@@ -56,7 +56,9 @@ class ReversalAgent(BaseAgent):
                 reason="Gagal mendeteksi SMC structure"
             )
 
-        current_price = df_h1['close'].iloc[-1]
+        current_price = df_h1["close"].iloc[-1]
+        candle_high = df_h1["high"].iloc[-1]
+        candle_low = df_h1["low"].iloc[-1]
 
         # Cari OB aktif terdekat
         nearest_bull_ob = None  # OB bullish aktif terdekat di BAWAH harga
@@ -64,11 +66,11 @@ class ReversalAgent(BaseAgent):
 
         for ob in result.order_blocks:
             if not ob.mitigated:  # Hanya OB yang belum mitigated
-                if ob.bias == 1 and ob.high < current_price:
+                if ob.bias == 1 and candle_low <= ob.high and candle_high >= ob.low:
                     # Bullish OB di bawah harga
                     if nearest_bull_ob is None or ob.high > nearest_bull_ob.high:
                         nearest_bull_ob = ob
-                elif ob.bias == -1 and ob.low > current_price:
+                elif ob.bias == -1 and candle_low <= ob.high and candle_high >= ob.low:
                     # Bearish OB di atas harga
                     if nearest_bear_ob is None or ob.low < nearest_bear_ob.low:
                         nearest_bear_ob = ob

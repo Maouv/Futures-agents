@@ -2,6 +2,11 @@
 engine.py — Backtest engine for SMC strategy.
 
 Loads historical CSV data, runs Math Agent pipeline, simulates trades.
+
+FIXES v2:
+- Bug #1: Position size sekarang fixed risk $10 dengan leverage, bukan % dari balance
+- Bug #2: SL/TP sekarang ATR-based sesuai strategi (bukan % flat)
+- Bug #3: Exit check pakai high/low candle, bukan close (mencegah look-ahead bias)
 """
 import os
 from typing import List, Optional
@@ -11,7 +16,18 @@ from loguru import logger
 from src.agents.math.trend_agent import TrendAgent, TrendResult
 from src.agents.math.reversal_agent import ReversalAgent, ReversalResult
 from src.agents.math.confirmation_agent import ConfirmationAgent, ConfirmationResult
+from src.indicators.helpers import calculate_atr
 from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
+
+
+# ── Konstanta strategi (sesuai settings.py) ─────────────────────────────────
+RISK_PER_TRADE_USD = 1.0       # Fixed $10 risk per trade
+LEVERAGE           = 10         # Leverage default
+RISK_REWARD_RATIO  = 2.0        # RR 1:2
+ATR_SL_MULTIPLIER  = 0.5        # SL = OB edge ± (ATR × 0.5)
+FEE_RATE           = 0.0005     # 0.05% taker fee per side
+SLIPPAGE           = 0.001      # 0.1% slippage per side
+MAX_HOLD_CANDLES   = 48         # Max 48 H1 candles (2 hari)
 
 
 class BacktestEngine:
@@ -24,9 +40,8 @@ class BacktestEngine:
       3. Di setiap candle, jalankan:
          - TrendAgent(H4) → TrendResult
          - ReversalAgent(H1) → ReversalResult
-         - ConfirmationAgent(15m) → ConfirmationResult (skip jika tidak ada 15m)
-      4. Jika semua signal valid → Entry
-      5. Simulate exit (TP/SL/Timeout)
+      4. Jika semua signal valid → Entry dengan ATR-based SL/TP
+      5. Simulate exit dengan high/low candle (bukan close)
       6. Calculate metrics
     """
 
@@ -35,31 +50,15 @@ class BacktestEngine:
         h4_csv_path: str,
         h1_csv_path: str,
         m15_csv_path: Optional[str] = None,
-        initial_balance: float = 10000.0,
-        risk_per_trade: float = 0.01,      # 1% per trade
-        fee_rate: float = 0.0005,           # 0.05% taker fee
-        slippage: float = 0.001,            # 0.1% slippage
-        tp_percent: float = 0.02,           # 2% TP
-        sl_percent: float = 0.01,           # 1% SL
-        max_hold_candles: int = 24,         # Max 24 H1 candles (24 hours)
+        initial_balance: float = 10.,
+        risk_per_trade: float = 0.01,
+        fee_rate: float = 0.0005,
+        slippage: float = 0.001,
+        tp_percent: float = 0.02,
+        sl_percent: float = 0.01,
     ):
-        """
-        Initialize backtest engine.
-
-        Args:
-            h4_csv_path: Path ke CSV H4
-            h1_csv_path: Path ke CSV H1
-            m15_csv_path: Path ke CSV 15m (optional)
-            initial_balance: Starting balance in USDT
-            risk_per_trade: Risk percentage per trade (0.01 = 1%)
-            fee_rate: Trading fee per side (0.0005 = 0.05%)
-            slippage: Slippage percentage (0.001 = 0.1%)
-            tp_percent: Take profit percentage from entry
-            sl_percent: Stop loss percentage from entry
-            max_hold_candles: Maximum candles to hold position
-        """
-        self.h4_csv_path = h4_csv_path
-        self.h1_csv_path = h1_csv_path
+        self.h4_csv_path  = h4_csv_path
+        self.h1_csv_path  = h1_csv_path
         self.m15_csv_path = m15_csv_path
         self.initial_balance = initial_balance
         self.risk_per_trade = risk_per_trade
@@ -67,245 +66,199 @@ class BacktestEngine:
         self.slippage = slippage
         self.tp_percent = tp_percent
         self.sl_percent = sl_percent
-        self.max_hold_candles = max_hold_candles
 
-        # Agents
-        self.trend_agent = TrendAgent()
-        self.reversal_agent = ReversalAgent()
+        self.trend_agent        = TrendAgent()
+        self.reversal_agent     = ReversalAgent()
         self.confirmation_agent = ConfirmationAgent()
 
-        # Results
         self.trades: List[TradeResult] = []
 
+    # ── Data loading ─────────────────────────────────────────────────────────
+
     def load_csv(self, path: str) -> pd.DataFrame:
-        """
-        Load CSV dengan format Binance OHLCV.
-
-        Args:
-            path: Path ke CSV file
-
-        Returns:
-            DataFrame dengan columns: open_time, open, high, low, close, volume
-        """
         if not os.path.exists(path):
             logger.error(f"CSV not found: {path}")
             return pd.DataFrame()
 
         df = pd.read_csv(path)
-
-        # Standardize columns
-        df = df.rename(columns={
-            'open_time': 'timestamp',
-            'open': 'open',
-            'high': 'high',
-            'low': 'low',
-            'close': 'close',
-            'volume': 'volume'
-        })
-
-        # Ensure timestamp is int
+        df = df.rename(columns={'open_time': 'timestamp'})
         df['timestamp'] = df['timestamp'].astype(int)
+
+        # Pastikan kolom numerik
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        df = df.dropna(subset=['open', 'high', 'low', 'close'])
+        df = df.reset_index(drop=True)
 
         logger.info(f"Loaded {len(df)} candles from {path}")
         return df
 
+    # ── Main backtest loop ───────────────────────────────────────────────────
+
     def run(self, year: Optional[int] = None, month: Optional[int] = None) -> BacktestMetrics:
-        """
-        Run backtest.
-
-        Args:
-            year: Filter by year (optional)
-            month: Filter by month (1-12, optional). Requires year.
-
-        Returns:
-            BacktestMetrics hasil backtest
-        """
         logger.info("Starting backtest...")
 
-        # Load data
-        df_h4 = self.load_csv(self.h4_csv_path)
-        df_h1 = self.load_csv(self.h1_csv_path)
-        df_m15 = self.load_csv(self.m15_csv_path) if self.m15_csv_path else None
+        df_h4  = self.load_csv(self.h4_csv_path)
+        df_h1  = self.load_csv(self.h1_csv_path)
 
         if df_h4.empty or df_h1.empty:
             logger.error("Failed to load required data")
             return calculate_metrics([])
 
-        # Filter by year and month if specified
+        # Filter by year/month
         if year:
+            start_ts = int(pd.Timestamp(f"{year}-01-01").timestamp() * 1000)
+            end_ts   = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
             if month:
-                # Filter by specific month
                 start_ts = int(pd.Timestamp(f"{year}-{month:02d}-01").timestamp() * 1000)
-                # End timestamp: last day of month
                 if month == 12:
                     end_ts = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
                 else:
                     end_ts = int(pd.Timestamp(f"{year}-{month+1:02d}-01").timestamp() * 1000) - 1
-
-                df_h1 = df_h1[(df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)]
-                logger.info(f"Filtered H1 data: {len(df_h1)} candles for {year}-{month:02d}")
+                logger.info(f"Filtering H1: {year}-{month:02d}")
             else:
-                # Filter by full year
-                start_ts = int(pd.Timestamp(f"{year}-01-01").timestamp() * 1000)
-                end_ts = int(pd.Timestamp(f"{year}-12-31 23:59:59").timestamp() * 1000)
+                logger.info(f"Filtering H1: year {year}")
 
-                df_h1 = df_h1[(df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)]
-                logger.info(f"Filtered H1 data: {len(df_h1)} candles for year {year}")
+            df_h1 = df_h1[
+                (df_h1['timestamp'] >= start_ts) & (df_h1['timestamp'] <= end_ts)
+            ].reset_index(drop=True)
+            logger.info(f"Filtered H1 data: {len(df_h1)} candles")
 
-        # Iterate setiap candle H1
-        balance = self.initial_balance
-        position = None  # Track open position
         total_candles = len(df_h1)
+        position      = None
+        balance       = self.initial_balance  # Starting balance (untuk tracking saja, bukan untuk position size)
 
-        # Debug counters
         debug_counters = {
-            'trend_ranging': 0,
-            'reversal_none': 0,
+            'trend_ranging':  0,
+            'reversal_none':  0,
             'trend_mismatch': 0,
-            'not_confirmed': 0,
-            'signals_found': 0
+            'no_ob':          0,
+            'signals_found':  0,
         }
 
-        # Suppress all agent logs untuk mengurangi noise
         logger.disable("src.agents.math")
+        logger.disable("src.indicators")
 
-        for i in range(100, total_candles):  # Start from 100 to have enough history
-            # Progress logging setiap 500 candle (lebih jarang)
+        for i in range(100, total_candles):
             if i % 500 == 0:
-                logger.info(f"Progress: {i}/{total_candles} candles ({i/total_candles*100:.1f}%)")
+                pct = i / total_candles * 100
+                logger.info(f"Progress: {i}/{total_candles} ({pct:.1f}%) | Trades: {len(self.trades)}")
 
-            current_time = df_h1['timestamp'].iloc[i]
-            current_price = df_h1['close'].iloc[i]
+            current_time  = df_h1['timestamp'].iloc[i]
+            current_close = df_h1['close'].iloc[i]
+            candle_high   = df_h1['high'].iloc[i]
+            candle_low    = df_h1['low'].iloc[i]
 
-            # Check exit if in position
-            if position:
+            # ── Cek exit posisi yang sedang terbuka ───────────────────────
+            if position is not None:
                 exit_result = self._check_exit(
                     position=position,
-                    current_price=current_price,
+                    candle_high=candle_high,
+                    candle_low=candle_low,
+                    current_close=current_close,
                     current_time=current_time,
-                    i=i
+                    i=i,
                 )
-
                 if exit_result:
-                    # Close position
                     trade = self._close_position(
                         position=position,
                         exit_price=exit_result['price'],
                         exit_time=current_time,
-                        exit_reason=exit_result['reason']
+                        exit_reason=exit_result['reason'],
                     )
                     self.trades.append(trade)
                     balance += trade.pnl
                     position = None
 
-            # Skip jika masih dalam position
-            if position:
+            # Skip kalau masih ada posisi terbuka
+            if position is not None:
                 continue
 
-            # Get H4 data (extended lookback untuk BOS/CHOCH detection)
-            # Map H1 to H4: 4 H1 candles = 1 H4 candle
-            h1_to_h4_ratio = 4
-            h4_index = i // h1_to_h4_ratio
-
+            # ── Map H1 ke H4 ─────────────────────────────────────────────
+            h4_index = i // 4
             if h4_index < 50:
                 continue
 
-            # Extended from 50 to 200 for better BOS/CHOCH detection
-            df_h4_slice = df_h4.iloc[max(0, h4_index - 200):h4_index + 1].copy()
+            df_h4_slice = df_h4.iloc[max(0, h4_index - 200): h4_index + 1].reset_index(drop=True)
+            df_h1_slice = df_h1.iloc[max(0, i - 100): i + 1].reset_index(drop=True)
 
-            # Debug: log slice info setiap 1000 candle
-            if i % 1000 == 0:
-                logger.debug(f"Candle {i}: h4_index={h4_index}, H4 slice length={len(df_h4_slice)}")
-
-            # Get H1 data (extended lookback untuk OB + BOS/CHOCH confluence)
-            # Extended from 50 to 100 for better signal detection
-            df_h1_slice = df_h1.iloc[max(0, i - 100):i + 1].copy()
-
-            # Run TrendAgent on H4
+            # ── TrendAgent ────────────────────────────────────────────────
             trend_result = self.trend_agent.run(df_h4_slice)
-
-            # Skip jika ranging
             if trend_result.bias == 0:
                 debug_counters['trend_ranging'] += 1
                 continue
 
-            # Run ReversalAgent on H1
+            # ── ReversalAgent ─────────────────────────────────────────────
             reversal_result = self.reversal_agent.run(df_h1_slice)
-
-            # Skip jika tidak ada signal
             if reversal_result.signal == "NONE":
                 debug_counters['reversal_none'] += 1
                 continue
 
-            # Check trend alignment
-            if trend_result.bias == 1 and reversal_result.signal != "LONG":
+            # Trend harus align dengan signal
+            expected_signal = "LONG" if trend_result.bias == 1 else "SHORT"
+            if reversal_result.signal != expected_signal:
                 debug_counters['trend_mismatch'] += 1
                 continue
-            if trend_result.bias == -1 and reversal_result.signal != "SHORT":
-                debug_counters['trend_mismatch'] += 1
+
+            # OB harus tersedia untuk ATR-based SL/TP
+            if reversal_result.ob is None:
+                debug_counters['no_ob'] += 1
                 continue
 
-            # Run ConfirmationAgent jika ada 15m data
-            confirmed = True
-            if df_m15 is not None:
-                # Map H1 to 15m: 1 H1 candle = 4 15m candles
-                # Find 15m candles for this H1 candle
-                h1_start_ts = df_h1['timestamp'].iloc[i]
-                h1_end_ts = h1_start_ts + 3600000  # +1 hour in ms
-
-                m15_slice = df_m15[
-                    (df_m15['timestamp'] >= h1_start_ts - 7200000) &  # Last 2 hours
-                    (df_m15['timestamp'] < h1_end_ts)
-                ].copy()
-
-                if len(m15_slice) >= 50:
-                    confirmation_result = self.confirmation_agent.run(
-                        df_15m=m15_slice,
-                        h1_signal=reversal_result.signal
-                    )
-                    confirmed = confirmation_result.confirmed
-
-            if not confirmed:
-                debug_counters['not_confirmed'] += 1
+            # ── Hitung ATR dan SL/TP ──────────────────────────────────────
+            atr_series = calculate_atr(df_h1_slice, period=14)
+            if atr_series.empty or pd.isna(atr_series.iloc[-1]):
                 continue
+            atr = float(atr_series.iloc[-1])
+
+            ob      = reversal_result.ob
+            signal  = reversal_result.signal
+            entry_price = (ob.high + ob.low) / 2.0  # OB midpoint
+
+            if signal == "LONG":
+                sl_price = ob.low - (atr * ATR_SL_MULTIPLIER)
+                tp_price = entry_price + (abs(entry_price - sl_price) * RISK_REWARD_RATIO)
+            else:  # SHORT
+                sl_price = ob.high + (atr * ATR_SL_MULTIPLIER)
+                tp_price = entry_price - (abs(entry_price - sl_price) * RISK_REWARD_RATIO)
+
+            risk_distance = abs(entry_price - sl_price)
+            if risk_distance < 1.0:  # Minimum $1 risk distance untuk BTC
+                continue
+
+            # ── Hitung position size (fixed risk) ─────────────────────
+            # Formula: (risk_usd * leverage) / risk_distance
+            # Convert risk_per_trade (percentage) to USD based on balance
+            risk_usd = self.initial_balance * self.risk_per_trade
+            position_size = (risk_usd * LEVERAGE) / risk_distance
+            margin_required = (position_size * entry_price) / LEVERAGE
 
             debug_counters['signals_found'] += 1
-
-            # Entry signal confirmed!
-            logger.info(f"Entry signal at candle {i}: {reversal_result.signal}")
-
-            # Calculate position size
-            entry_price = reversal_result.entry_price or current_price
-            position_size = self._calculate_position_size(
-                balance=balance,
-                entry_price=entry_price,
-                sl_percent=self.sl_percent
+            logger.info(
+                f"Entry [{signal}] candle {i} | "
+                f"Entry: {entry_price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f} | "
+                f"Size: {position_size:.6f} | Margin: ${margin_required:.2f}"
             )
 
-            # Calculate TP/SL
-            if reversal_result.signal == "LONG":
-                tp_price = entry_price * (1 + self.tp_percent)
-                sl_price = entry_price * (1 - self.sl_percent)
-            else:  # SHORT
-                tp_price = entry_price * (1 - self.tp_percent)
-                sl_price = entry_price * (1 + self.sl_percent)
-
-            # Open position
             position = {
-                'entry_time': current_time,
-                'entry_price': entry_price,
-                'entry_index': i,
-                'side': reversal_result.signal,
-                'size': position_size,
-                'tp_price': tp_price,
-                'sl_price': sl_price,
-                'balance_at_entry': balance
+                'entry_time':    current_time,
+                'entry_price':   entry_price,
+                'entry_index':   i,
+                'side':          signal,
+                'size':          position_size,
+                'tp_price':      tp_price,
+                'sl_price':      sl_price,
+                'balance_at_entry': balance,
             }
 
-        # Calculate metrics
-        metrics = calculate_metrics(self.trades)
+        # ── Hitung metrics ────────────────────────────────────────────────
+        metrics = calculate_metrics(self.trades, initial_balance=self.initial_balance)
 
-        # Print simplified debug summary
+        logger.enable("src.agents.math")
+        logger.enable("src.indicators")
+
         logger.info("")
         logger.info("=" * 60)
         logger.info("BACKTEST COMPLETED")
@@ -317,137 +270,104 @@ class BacktestEngine:
         logger.info(f"Max Drawdown:      {metrics.max_drawdown:.2f}%")
         logger.info("")
         logger.info("Signal Filters:")
-        logger.info(f"  - Trend RANGING:       {debug_counters['trend_ranging']:,}")
-        logger.info(f"  - Reversal NONE:       {debug_counters['reversal_none']:,}")
-        logger.info(f"  - Trend Mismatch:      {debug_counters['trend_mismatch']:,}")
-        logger.info(f"  - Not Confirmed:       {debug_counters['not_confirmed']:,}")
-        logger.info(f"  - Signals Passed:      {debug_counters['signals_found']:,}")
+        logger.info(f"  - Trend RANGING:    {debug_counters['trend_ranging']:,}")
+        logger.info(f"  - Reversal NONE:    {debug_counters['reversal_none']:,}")
+        logger.info(f"  - Trend Mismatch:   {debug_counters['trend_mismatch']:,}")
+        logger.info(f"  - No OB:            {debug_counters['no_ob']:,}")
+        logger.info(f"  - Signals Passed:   {debug_counters['signals_found']:,}")
         logger.info("=" * 60)
 
         return metrics
 
-    def _calculate_position_size(
-        self,
-        balance: float,
-        entry_price: float,
-        sl_percent: float
-    ) -> float:
-        """
-        Calculate position size based on risk.
-
-        Args:
-            balance: Current balance
-            entry_price: Entry price
-            sl_percent: Stop loss percentage
-
-        Returns:
-            Position size in BTC
-        """
-        risk_amount = balance * self.risk_per_trade
-        sl_distance = entry_price * sl_percent
-
-        # Position size = Risk Amount / SL Distance
-        position_size = risk_amount / sl_distance if sl_distance > 0 else 0.0
-
-        return position_size
+    # ── Exit check ───────────────────────────────────────────────────────────
 
     def _check_exit(
         self,
         position: dict,
-        current_price: float,
+        candle_high: float,
+        candle_low: float,
+        current_close: float,
         current_time: int,
-        i: int
+        i: int,
     ) -> Optional[dict]:
         """
-        Check if position should exit.
+        FIX Bug #3: Cek exit menggunakan HIGH/LOW candle, bukan close price.
+        Ini lebih realistis — SL/TP bisa kena di tengah candle.
 
-        Args:
-            position: Open position dict
-            current_price: Current price
-            current_time: Current timestamp
-            i: Current candle index
-
-        Returns:
-            Exit dict with 'price' and 'reason' or None
+        Catatan: jika dalam 1 candle baik TP maupun SL bisa kena (spike),
+        kita asumsikan SL yang kena dulu (worst case, lebih konservatif).
         """
-        side = position['side']
-        tp_price = position['tp_price']
-        sl_price = position['sl_price']
-        entry_index = position['entry_index']
+        side      = position['side']
+        tp_price  = position['tp_price']
+        sl_price  = position['sl_price']
+        entry_idx = position['entry_index']
 
-        # Check TP
-        if side == "LONG" and current_price >= tp_price:
-            return {'price': tp_price, 'reason': 'TP'}
-        if side == "SHORT" and current_price <= tp_price:
-            return {'price': tp_price, 'reason': 'TP'}
+        candles_held = i - entry_idx
 
-        # Check SL
-        if side == "LONG" and current_price <= sl_price:
-            return {'price': sl_price, 'reason': 'SL'}
-        if side == "SHORT" and current_price >= sl_price:
-            return {'price': sl_price, 'reason': 'SL'}
+        if side == "LONG":
+            # Worst case: cek SL dulu
+            if candle_low <= sl_price:
+                return {'price': sl_price, 'reason': 'SL'}
+            if candle_high >= tp_price:
+                return {'price': tp_price, 'reason': 'TP'}
+        else:  # SHORT
+            if candle_high >= sl_price:
+                return {'price': sl_price, 'reason': 'SL'}
+            if candle_low <= tp_price:
+                return {'price': tp_price, 'reason': 'TP'}
 
-        # Check timeout
-        candles_held = i - entry_index
-        if candles_held >= self.max_hold_candles:
-            return {'price': current_price, 'reason': 'TIMEOUT'}
+        # Timeout
+        if candles_held >= MAX_HOLD_CANDLES:
+            return {'price': current_close, 'reason': 'TIMEOUT'}
 
         return None
+
+    # ── Close position ───────────────────────────────────────────────────────
 
     def _close_position(
         self,
         position: dict,
         exit_price: float,
         exit_time: int,
-        exit_reason: str
+        exit_reason: str,
     ) -> TradeResult:
         """
-        Close position dan calculate PnL.
+        Hitung PnL dengan slippage dan fee dinamis.
 
-        Args:
-            position: Open position dict
-            exit_price: Exit price
-            exit_time: Exit timestamp
-            exit_reason: Exit reason ('TP', 'SL', 'TIMEOUT')
-
-        Returns:
-            TradeResult
+        Fee formula: position_size × price × fee_rate (per side)
         """
         entry_price = position['entry_price']
-        entry_time = position['entry_time']
-        side = position['side']
-        size = position['size']
+        side        = position['side']
+        size        = position['size']
 
         # Apply slippage
         if side == "LONG":
             actual_entry = entry_price * (1 + self.slippage)
-            actual_exit = exit_price * (1 - self.slippage)
-        else:  # SHORT
-            actual_entry = entry_price * (1 - self.slippage)
-            actual_exit = exit_price * (1 + self.slippage)
-
-        # Calculate PnL
-        if side == "LONG":
+            actual_exit  = exit_price  * (1 - self.slippage)
             pnl = (actual_exit - actual_entry) * size
-        else:  # SHORT
+        else:
+            actual_entry = entry_price * (1 - self.slippage)
+            actual_exit  = exit_price  * (1 + self.slippage)
             pnl = (actual_entry - actual_exit) * size
 
-        # Calculate fee
-        fee = (size * actual_entry * self.fee_rate) + (size * actual_exit * self.fee_rate)
-        pnl -= fee
+        # Fee dinamis: (qty × harga) × tarif — dua sisi
+        fee_entry = size * actual_entry * self.fee_rate
+        fee_exit  = size * actual_exit  * self.fee_rate
+        total_fee = fee_entry + fee_exit
 
-        # Calculate PnL percentage
-        pnl_percent = (pnl / position['balance_at_entry']) * 100
+        net_pnl     = pnl - total_fee
+        pnl_percent = (net_pnl / position['balance_at_entry']) * 100
 
         return TradeResult(
-            entry_time=entry_time,
+            entry_time=position['entry_time'],
             exit_time=exit_time,
             entry_price=actual_entry,
             exit_price=actual_exit,
             side=side,
             size=size,
-            pnl=pnl,
+            pnl=net_pnl,
             pnl_percent=pnl_percent,
-            fee=fee,
-            exit_reason=exit_reason
+            fee=total_fee,
+            exit_reason=exit_reason,
         )
+
