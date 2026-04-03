@@ -24,7 +24,7 @@ from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
 RISK_PER_TRADE_USD = 1.0       # Fixed $10 risk per trade
 LEVERAGE           = 10         # Leverage default
 RISK_REWARD_RATIO  = 2.0        # RR 1:2
-ATR_SL_MULTIPLIER  = 0.5        # SL = OB edge ± (ATR × 0.5)
+ATR_SL_MULTIPLIER  = 1.0        # SL = OB edge ± (ATR × 0.5)
 FEE_RATE           = 0.0005     # 0.05% taker fee per side
 SLIPPAGE           = 0.001      # 0.1% slippage per side
 MAX_HOLD_CANDLES   = 48         # Max 48 H1 candles (2 hari)
@@ -191,7 +191,7 @@ class BacktestEngine:
                 continue
 
             # ── ReversalAgent ─────────────────────────────────────────────
-            reversal_result = self.reversal_agent.run(df_h1_slice)
+            reversal_result = self.reversal_agent.run(df_h1_slice, swing_size=3)
             if reversal_result.signal == "NONE":
                 debug_counters['reversal_none'] += 1
                 continue
