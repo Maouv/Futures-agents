@@ -33,6 +33,9 @@ class RateLimiter:
 
     def wait_if_needed(self) -> None:
         """Block sampai slot tersedia dalam window."""
+        # Calculate sleep time outside lock
+        sleep_time = 0.0
+
         with self._lock:
             now = time.monotonic()
 
@@ -43,17 +46,20 @@ class RateLimiter:
             if len(self._calls) >= self.max_calls:
                 # Hitung waktu tunggu
                 sleep_time = self._calls[0] + self.period - now
-                if sleep_time > 0:
-                    logger.warning(f"Rate limit reached. Waiting {sleep_time:.2f}s")
-                    # Release lock sebelum sleep agar thread lain bisa cek
-                    self._lock.release()
-                    time.sleep(sleep_time)
-                    self._lock.acquire()
-                    # Re-clean setelah sleep
-                    now = time.monotonic()
-                    while self._calls and self._calls[0] <= now - self.period:
-                        self._calls.popleft()
 
+        # Sleep di luar lock agar thread lain bisa akses
+        if sleep_time > 0:
+            logger.warning(f"Rate limit reached. Waiting {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+
+            # Re-check setelah sleep
+            with self._lock:
+                now = time.monotonic()
+                while self._calls and self._calls[0] <= now - self.period:
+                    self._calls.popleft()
+
+        # Record this call
+        with self._lock:
             self._calls.append(time.monotonic())
 
     def limit(self, func: Callable[..., T]) -> Callable[..., T]:

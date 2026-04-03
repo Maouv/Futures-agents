@@ -24,6 +24,31 @@ from src.utils.logger import logger, setup_logger
 
 SYMBOL = "BTCUSDT"
 
+# Global event loop reference untuk background thread
+_event_loop = None
+
+
+def _send_notification_sync(message: str):
+    """
+    Helper untuk mengirim notifikasi dari background thread.
+    Menggunakan asyncio.run_coroutine_threadsafe untuk schedule coroutine ke main event loop.
+    """
+    global _event_loop
+    if _event_loop is None:
+        logger.error("Event loop not initialized. Cannot send notification.")
+        return
+
+    try:
+        # Schedule coroutine ke main event loop
+        future = asyncio.run_coroutine_threadsafe(
+            send_notification(message),
+            _event_loop
+        )
+        # Wait hingga selesai (timeout 10 detik)
+        future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Failed to send notification: {e}")
+
 
 def run_trading_cycle():
     """
@@ -74,12 +99,12 @@ def run_trading_cycle():
                 )
 
                 if result.action == 'OPEN':
-                    asyncio.run(send_notification(
+                    _send_notification_sync(
                         f"🔔 Paper {decision.action}\n"
                         f"Entry: ${risk.entry_price:,.2f}\n"
                         f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                         f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
-                    ))
+                    )
             else:
                 logger.info("No OB available for entry. Skipping.")
         else:
@@ -99,19 +124,24 @@ def _run_sltp_check(df_15m):
 
     for trade in closed:
         emoji = "✅" if trade['pnl'] > 0 else "❌"
-        asyncio.run(send_notification(
+        _send_notification_sync(
             f"{emoji} {trade['reason']} Hit\n"
             f"{trade['pair']} {trade['side']}\n"
             f"PnL: ${trade['pnl']:.2f}"
-        ))
+        )
 
 
 def main():
+    global _event_loop
     setup_logger()
     logger.info(f"Starting Futures Agent | Mode: {settings.EXECUTION_MODE.upper()}")
 
     # Init DB
     init_db()
+
+    # Buat event loop untuk main thread
+    _event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_event_loop)
 
     # Scheduler — jalankan di background thread
     scheduler = BackgroundScheduler()

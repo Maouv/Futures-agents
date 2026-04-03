@@ -73,6 +73,10 @@ class RiskAgent(BaseAgent):
         # Calculate risk distance
         risk_distance = abs(entry_price - sl_price)
 
+        # Validate risk distance
+        if risk_distance == 0 or risk_distance < 0.01:
+            raise ValueError(f"Risk distance terlalu kecil atau nol: {risk_distance}")
+
         # Calculate TP based on Risk:Reward ratio from settings
         rr_ratio = settings.RISK_REWARD_RATIO
         if signal == "LONG":
