@@ -77,7 +77,7 @@ def run_trading_cycle():
 
         # ── 3. Math Agents ─────────────────────────────────────────────
         trend        = TrendAgent().run(df_h4)
-        reversal     = ReversalAgent().run(df_h1)
+        reversal     = ReversalAgent().run(df_h1, swing_size=3)
         confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
 
         logger.info(f"Trend: {trend.bias_label} | Signal: {reversal.signal} | Confirmed: {confirmation.confirmed}")

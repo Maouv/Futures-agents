@@ -66,9 +66,9 @@ class RiskAgent(BaseAgent):
 
         # Calculate SL based on signal direction
         if signal == "LONG":
-            sl_price = order_block.low - (atr * 0.5)
+            sl_price = order_block.low - (atr * 1.0)
         else:  # SHORT
-            sl_price = order_block.high + (atr * 0.5)
+            sl_price = order_block.high + (atr * 1.0)
 
         # Calculate risk distance
         risk_distance = abs(entry_price - sl_price)
