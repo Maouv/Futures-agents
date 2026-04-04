@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from loguru import logger
 from src.backtest.engine import BacktestEngine
+from src.backtest.metrics import calculate_metrics, TradeResult
 
 
 def main():
@@ -80,10 +81,10 @@ def main():
         help='Enable 15m confirmation filter (requires 15m data)'
     )
     parser.add_argument(
-        '--pair',
+        '--pairs',
         type=str,
         default='BTCUSDT',
-        help='Trading pair (default: BTCUSDT)'
+        help='Trading pairs comma-separated (default: BTCUSDT). Example: BTCUSDT,ETHUSDT,SOLUSDT'
     )
     parser.add_argument(
         '--export-csv',
@@ -93,104 +94,139 @@ def main():
 
     args = parser.parse_args()
 
-    # Paths to data
-    project_root = Path(__file__).parent.parent
-    h4_csv = project_root / 'data' / 'historical' / f'{args.pair}-4h-full.csv'
-    h1_csv = project_root / 'data' / 'historical' / f'{args.pair}-1h-full.csv'
-    m15_csv = project_root / 'data' / 'historical' / f'{args.pair}-15m-full.csv'
-
-    # Check files exist
-    if not h4_csv.exists():
-        logger.error(f"H4 data not found: {h4_csv}")
-        sys.exit(1)
-
-    if not h1_csv.exists():
-        logger.error(f"H1 data not found: {h1_csv}")
-        sys.exit(1)
-
-    # Check 15m data if confirmation enabled
-    if args.use_confirmation:
-        if not m15_csv.exists():
-            logger.error(f"15m data not found: {m15_csv}")
-            logger.error("Download 15m data or run without --use-confirmation")
-            sys.exit(1)
-
-    # Initialize engine
-    engine = BacktestEngine(
-        h4_csv_path=str(h4_csv),
-        h1_csv_path=str(h1_csv),
-        m15_csv_path=str(m15_csv) if args.use_confirmation else None,
-        initial_balance=args.initial_balance,
-        risk_per_trade=args.risk_per_trade,
-        fee_rate=args.fee_rate,
-        slippage=args.slippage,
-        tp_percent=args.tp_percent,
-        sl_percent=args.sl_percent,
-        use_confirmation=args.use_confirmation,
-    )
+    # Parse pairs
+    pairs = [p.strip() for p in args.pairs.split(',')]
 
     # Validate month requires year
     if args.month is not None and args.year is None:
         logger.error("--month requires --year to be specified")
         sys.exit(1)
 
-    # Run backtest
-    if args.month:
-        logger.info(f"Running backtest for {args.year}-{args.month:02d}")
-    elif args.year:
-        logger.info(f"Running backtest for year: {args.year}")
-    else:
-        logger.info("Running backtest for all years")
+    project_root = Path(__file__).parent.parent
 
-    metrics = engine.run(year=args.year, month=args.month)
+    # Collect all trades from all pairs
+    all_trades: List[TradeResult] = []
 
-    # Print detailed results
-    print("\n" + "=" * 60)
-    print("BACKTEST RESULTS")
-    print("=" * 60)
-    print(f"Total Trades:      {metrics.total_trades}")
-    print(f"Winning Trades:    {metrics.winning_trades}")
-    print(f"Losing Trades:     {metrics.losing_trades}")
-    print(f"Win Rate:          {metrics.win_rate:.2f}%")
-    print(f"Total PnL:         {metrics.total_pnl:.2f} USDT")
-    print(f"Gross Profit:      {metrics.gross_profit:.2f} USDT")
-    print(f"Gross Loss:        {metrics.gross_loss:.2f} USDT")
-    print(f"Profit Factor:     {metrics.profit_factor:.2f}")
-    print(f"Max Drawdown:      {metrics.max_drawdown:.2f}%")
-    print(f"Average Win:       {metrics.avg_win:.2f} USDT")
-    print(f"Average Loss:      {metrics.avg_loss:.2f} USDT")
-    print(f"Largest Win:       {metrics.largest_win:.2f} USDT")
-    print(f"Largest Loss:      {metrics.largest_loss:.2f} USDT")
-    print("=" * 60)
+    # Run backtest for each pair sequentially
+    for pair in pairs:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing pair: {pair}")
+        logger.info(f"{'='*60}")
 
-    # Print trade distribution
-    if metrics.total_trades > 0:
-        print("\nTRADE DISTRIBUTION")
-        print("=" * 60)
+        # Paths to data for this pair
+        h4_csv = project_root / 'data' / 'historical' / f'{pair}-4h-full.csv'
+        h1_csv = project_root / 'data' / 'historical' / f'{pair}-1h-full.csv'
+        m15_csv = project_root / 'data' / 'historical' / f'{pair}-15m-full.csv'
 
-        # Count exits by type
-        tp_trades = sum(1 for t in engine.trades if t.exit_reason == 'TP')
-        sl_trades = sum(1 for t in engine.trades if t.exit_reason == 'SL')
-        timeout_trades = sum(1 for t in engine.trades if t.exit_reason == 'TIMEOUT')
+        # Check files exist
+        if not h4_csv.exists():
+            logger.error(f"H4 data not found: {h4_csv}")
+            logger.error(f"Skipping pair: {pair}")
+            continue
 
-        print(f"TP Exits:          {tp_trades} ({tp_trades/metrics.total_trades*100:.1f}%)")
-        print(f"SL Exits:          {sl_trades} ({sl_trades/metrics.total_trades*100:.1f}%)")
-        print(f"Timeout Exits:     {timeout_trades} ({timeout_trades/metrics.total_trades*100:.1f}%)")
-        print("=" * 60)
+        if not h1_csv.exists():
+            logger.error(f"H1 data not found: {h1_csv}")
+            logger.error(f"Skipping pair: {pair}")
+            continue
 
-    # Export to CSV if flag is set
-    if args.export_csv:
-        output_dir = project_root / 'data' / 'backtest_results'
-        csv_path = engine.export_to_csv(
-            output_path=str(output_dir),
-            pair=args.pair,
-            year=args.year
+        # Check 15m data if confirmation enabled
+        if args.use_confirmation:
+            if not m15_csv.exists():
+                logger.error(f"15m data not found: {m15_csv}")
+                logger.error(f"Skipping pair: {pair}")
+                continue
+
+        # Initialize engine for this pair
+        engine = BacktestEngine(
+            h4_csv_path=str(h4_csv),
+            h1_csv_path=str(h1_csv),
+            m15_csv_path=str(m15_csv) if args.use_confirmation else None,
+            initial_balance=args.initial_balance,
+            risk_per_trade=args.risk_per_trade,
+            fee_rate=args.fee_rate,
+            slippage=args.slippage,
+            tp_percent=args.tp_percent,
+            sl_percent=args.sl_percent,
+            use_confirmation=args.use_confirmation,
         )
 
-        if csv_path:
-            print(f"\nCSV exported to: {csv_path}")
+        # Run backtest for this pair
+        if args.month:
+            logger.info(f"Running backtest for {pair} - {args.year}-{args.month:02d}")
+        elif args.year:
+            logger.info(f"Running backtest for {pair} - year: {args.year}")
+        else:
+            logger.info(f"Running backtest for {pair} - all years")
 
-    logger.info("Backtest completed successfully")
+        metrics = engine.run(year=args.year, month=args.month)
+
+        # Print results for this pair
+        print(f"\n{'='*60}")
+        print(f"BACKTEST RESULTS - {pair}")
+        print(f"{'='*60}")
+        print(f"Total Trades:      {metrics.total_trades}")
+        print(f"Win Rate:          {metrics.win_rate:.2f}%")
+        print(f"Total PnL:         {metrics.total_pnl:.2f} USDT")
+        print(f"Profit Factor:     {metrics.profit_factor:.2f}")
+        print(f"Max Drawdown:      {metrics.max_drawdown:.2f}%")
+        print(f"{'='*60}")
+
+        # Collect trades from this pair
+        all_trades.extend(engine.trades)
+
+        # Export to CSV if flag is set
+        if args.export_csv:
+            output_dir = project_root / 'data' / 'backtest_results'
+            csv_path = engine.export_to_csv(
+                output_path=str(output_dir),
+                pair=pair,
+                year=args.year
+            )
+
+            if csv_path:
+                print(f"CSV exported to: {csv_path}")
+
+    # After all pairs processed, calculate combined metrics
+    if all_trades:
+        # Sort all trades by entry time
+        all_trades.sort(key=lambda t: t.entry_time)
+
+        # Calculate combined metrics
+        combined_metrics = calculate_metrics(all_trades, initial_balance=args.initial_balance)
+
+        # Print combined results
+        print(f"\n{'='*60}")
+        print("COMBINED PORTFOLIO RESULTS")
+        print(f"{'='*60}")
+        print(f"Total Pairs:       {len(pairs)}")
+        print(f"Total Trades:      {combined_metrics.total_trades}")
+        print(f"Winning Trades:    {combined_metrics.winning_trades}")
+        print(f"Losing Trades:     {combined_metrics.losing_trades}")
+        print(f"Win Rate:          {combined_metrics.win_rate:.2f}%")
+        print(f"Total PnL:         {combined_metrics.total_pnl:.2f} USDT")
+        print(f"Gross Profit:      {combined_metrics.gross_profit:.2f} USDT")
+        print(f"Gross Loss:        {combined_metrics.gross_loss:.2f} USDT")
+        print(f"Profit Factor:     {combined_metrics.profit_factor:.2f}")
+        print(f"Max Drawdown:      {combined_metrics.max_drawdown:.2f}%")
+        print(f"Average Win:       {combined_metrics.avg_win:.2f} USDT")
+        print(f"Average Loss:      {combined_metrics.avg_loss:.2f} USDT")
+        print(f"Largest Win:       {combined_metrics.largest_win:.2f} USDT")
+        print(f"Largest Loss:      {combined_metrics.largest_loss:.2f} USDT")
+        print(f"{'='*60}")
+
+        # Print trade distribution
+        print(f"\nTRADE DISTRIBUTION")
+        print(f"{'='*60}")
+        tp_trades = sum(1 for t in all_trades if t.exit_reason == 'TP')
+        sl_trades = sum(1 for t in all_trades if t.exit_reason == 'SL')
+        timeout_trades = sum(1 for t in all_trades if t.exit_reason == 'TIMEOUT')
+
+        print(f"TP Exits:          {tp_trades} ({tp_trades/combined_metrics.total_trades*100:.1f}%)")
+        print(f"SL Exits:          {sl_trades} ({sl_trades/combined_metrics.total_trades*100:.1f}%)")
+        print(f"Timeout Exits:     {timeout_trades} ({timeout_trades/combined_metrics.total_trades*100:.1f}%)")
+        print(f"{'='*60}")
+
+    logger.info("\nBacktest completed successfully for all pairs")
 
 
 if __name__ == '__main__':

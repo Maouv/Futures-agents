@@ -19,13 +19,14 @@ from src.agents.math.trend_agent import TrendAgent, TrendResult
 from src.agents.math.reversal_agent import ReversalAgent, ReversalResult
 from src.agents.math.confirmation_agent import ConfirmationAgent, ConfirmationResult
 from src.indicators.helpers import calculate_atr
+from src.config.settings import settings
 from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
 
 
 # ── Konstanta strategi (sesuai settings.py) ─────────────────────────────────
 RISK_PER_TRADE_USD = 1.0       # Fixed $10 risk per trade
 LEVERAGE           = 10         # Leverage default
-RISK_REWARD_RATIO  = 2.0        # RR 1:2
+RISK_REWARD_RATIO  = settings.RISK_REWARD_RATIO
 ATR_SL_MULTIPLIER  = 1.0        # SL = OB edge ± (ATR × 0.5)
 FEE_RATE           = 0.0005     # 0.05% taker fee per side
 SLIPPAGE           = 0.001      # 0.1% slippage per side
