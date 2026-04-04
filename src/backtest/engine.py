@@ -9,7 +9,9 @@ FIXES v2:
 - Bug #3: Exit check pakai high/low candle, bukan close (mencegah look-ahead bias)
 """
 import os
+import csv
 from typing import List, Optional
+from pathlib import Path
 import pandas as pd
 from loguru import logger
 
@@ -56,6 +58,7 @@ class BacktestEngine:
         slippage: float = 0.001,
         tp_percent: float = 0.02,
         sl_percent: float = 0.01,
+        use_confirmation: bool = False,
     ):
         self.h4_csv_path  = h4_csv_path
         self.h1_csv_path  = h1_csv_path
@@ -66,6 +69,7 @@ class BacktestEngine:
         self.slippage = slippage
         self.tp_percent = tp_percent
         self.sl_percent = sl_percent
+        self.use_confirmation = use_confirmation
 
         self.trend_agent        = TrendAgent()
         self.reversal_agent     = ReversalAgent()
@@ -107,6 +111,22 @@ class BacktestEngine:
             logger.error("Failed to load required data")
             return calculate_metrics([])
 
+        # Load 15m data jika use_confirmation=True
+        df_m15 = None
+        if self.use_confirmation:
+            if self.m15_csv_path is None:
+                logger.error("use_confirmation=True but m15_csv_path not provided")
+                return calculate_metrics([])
+
+            df_m15 = self.load_csv(self.m15_csv_path)
+            if df_m15.empty:
+                logger.error("Failed to load 15m data")
+                return calculate_metrics([])
+
+            logger.info("Confirmation Agent ENABLED - using 15m timeframe filter")
+        else:
+            logger.info("Confirmation Agent DISABLED - running without 15m filter")
+
         # Filter by year/month
         if year:
             start_ts = int(pd.Timestamp(f"{year}-01-01").timestamp() * 1000)
@@ -135,6 +155,7 @@ class BacktestEngine:
             'reversal_none':  0,
             'trend_mismatch': 0,
             'no_ob':          0,
+            'confirmation_failed': 0,
             'signals_found':  0,
         }
 
@@ -167,6 +188,7 @@ class BacktestEngine:
                         exit_price=exit_result['price'],
                         exit_time=current_time,
                         exit_reason=exit_result['reason'],
+                        exit_index=i,
                     )
                     self.trades.append(trade)
                     balance += trade.pnl
@@ -206,6 +228,20 @@ class BacktestEngine:
             if reversal_result.ob is None:
                 debug_counters['no_ob'] += 1
                 continue
+
+            # ── ConfirmationAgent (opsional) ───────────────────────────────
+            if self.use_confirmation and df_m15 is not None:
+                # Map H1 index ke M15 index (1 H1 = 4 M15)
+                m15_index = i * 4
+                if m15_index < 50:
+                    continue
+
+                df_m15_slice = df_m15.iloc[max(0, m15_index - 200): m15_index + 1].reset_index(drop=True)
+                confirmation_result = self.confirmation_agent.run(df_m15_slice, reversal_result.signal)
+
+                if not confirmation_result.confirmed:
+                    debug_counters['confirmation_failed'] += 1
+                    continue
 
             # ── Hitung ATR dan SL/TP ──────────────────────────────────────
             atr_series = calculate_atr(df_h1_slice, period=14)
@@ -251,6 +287,12 @@ class BacktestEngine:
                 'tp_price':      tp_price,
                 'sl_price':      sl_price,
                 'balance_at_entry': balance,
+                # Additional metadata for CSV export
+                'atr':           atr,
+                'ob_high':       ob.high,
+                'ob_low':        ob.low,
+                'trend_bias':    trend_result.bias_label,
+                'confidence':    reversal_result.confidence,
             }
 
         # ── Hitung metrics ────────────────────────────────────────────────
@@ -274,6 +316,8 @@ class BacktestEngine:
         logger.info(f"  - Reversal NONE:    {debug_counters['reversal_none']:,}")
         logger.info(f"  - Trend Mismatch:   {debug_counters['trend_mismatch']:,}")
         logger.info(f"  - No OB:            {debug_counters['no_ob']:,}")
+        if self.use_confirmation:
+            logger.info(f"  - Confirmation Failed: {debug_counters['confirmation_failed']:,}")
         logger.info(f"  - Signals Passed:   {debug_counters['signals_found']:,}")
         logger.info("=" * 60)
 
@@ -330,6 +374,7 @@ class BacktestEngine:
         exit_price: float,
         exit_time: int,
         exit_reason: str,
+        exit_index: int,
     ) -> TradeResult:
         """
         Hitung PnL dengan slippage dan fee dinamis.
@@ -358,6 +403,9 @@ class BacktestEngine:
         net_pnl     = pnl - total_fee
         pnl_percent = (net_pnl / position['balance_at_entry']) * 100
 
+        # Calculate candles held
+        candles_held = exit_index - position['entry_index']
+
         return TradeResult(
             entry_time=position['entry_time'],
             exit_time=exit_time,
@@ -369,5 +417,91 @@ class BacktestEngine:
             pnl_percent=pnl_percent,
             fee=total_fee,
             exit_reason=exit_reason,
+            sl_price=position['sl_price'],
+            tp_price=position['tp_price'],
+            candles_held=candles_held,
+            atr=position.get('atr', 0.0),
+            ob_high=position.get('ob_high', 0.0),
+            ob_low=position.get('ob_low', 0.0),
+            trend_bias=position.get('trend_bias', 'RANGING'),
+            confidence=position.get('confidence', 0),
         )
+
+    # ── Export to CSV ─────────────────────────────────────────────────────────
+
+    def export_to_csv(self, output_path: str, pair: str = "BTCUSDT", year: Optional[int] = None) -> str:
+        """
+        Export trades to CSV file.
+
+        Args:
+            output_path: Directory path untuk menyimpan CSV
+            pair: Trading pair (e.g., 'BTCUSDT')
+            year: Year filter untuk filename
+
+        Returns:
+            Full path ke CSV file yang dibuat
+        """
+        if not self.trades:
+            logger.warning("No trades to export")
+            return ""
+
+        # Create output directory jika belum ada
+        output_dir = Path(output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate filename
+        year_str = str(year) if year else "all"
+        filename = f"{pair}_{year_str}_signals.csv"
+        filepath = output_dir / filename
+
+        # Define CSV columns
+        fieldnames = [
+            'timestamp_entry',
+            'timestamp_exit',
+            'pair',
+            'signal',
+            'entry_price',
+            'sl_price',
+            'tp_price',
+            'outcome',
+            'pnl',
+            'candles_held',
+            'atr',
+            'ob_high',
+            'ob_low',
+            'trend_bias',
+            'confidence'
+        ]
+
+        # Write to CSV
+        try:
+            with open(filepath, 'w', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for trade in self.trades:
+                    writer.writerow({
+                        'timestamp_entry': trade.entry_time,
+                        'timestamp_exit': trade.exit_time,
+                        'pair': pair,
+                        'signal': trade.side,
+                        'entry_price': f"{trade.entry_price:.2f}",
+                        'sl_price': f"{trade.sl_price:.2f}",
+                        'tp_price': f"{trade.tp_price:.2f}",
+                        'outcome': trade.exit_reason,
+                        'pnl': f"{trade.pnl:.2f}",
+                        'candles_held': trade.candles_held,
+                        'atr': f"{trade.atr:.2f}",
+                        'ob_high': f"{trade.ob_high:.2f}",
+                        'ob_low': f"{trade.ob_low:.2f}",
+                        'trend_bias': trade.trend_bias,
+                        'confidence': trade.confidence,
+                    })
+
+            logger.info(f"Exported {len(self.trades)} trades to {filepath}")
+            return str(filepath)
+
+        except Exception as e:
+            logger.error(f"Failed to export CSV: {e}")
+            return ""
 

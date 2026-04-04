@@ -17,6 +17,15 @@ class TradeResult(BaseModel):
     pnl_percent: float       # PnL percentage
     fee: float               # Total fee (entry + exit)
     exit_reason: str         # 'TP', 'SL', 'TIMEOUT'
+    # Additional fields for CSV export
+    sl_price: float = 0.0
+    tp_price: float = 0.0
+    candles_held: int = 0
+    atr: float = 0.0
+    ob_high: float = 0.0
+    ob_low: float = 0.0
+    trend_bias: str = "RANGING"  # 'BULLISH', 'BEARISH', 'RANGING'
+    confidence: int = 0
 
 
 class BacktestMetrics(BaseModel):

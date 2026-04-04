@@ -74,13 +74,30 @@ def main():
         default=0.01,
         help='Stop loss percentage (default: 0.01 = 1%%)'
     )
+    parser.add_argument(
+        '--use-confirmation',
+        action='store_true',
+        help='Enable 15m confirmation filter (requires 15m data)'
+    )
+    parser.add_argument(
+        '--pair',
+        type=str,
+        default='BTCUSDT',
+        help='Trading pair (default: BTCUSDT)'
+    )
+    parser.add_argument(
+        '--export-csv',
+        action='store_true',
+        help='Export trades to CSV file'
+    )
 
     args = parser.parse_args()
 
     # Paths to data
     project_root = Path(__file__).parent.parent
-    h4_csv = project_root / 'data' / 'historical' / 'BTCUSDT-4h-full.csv'
-    h1_csv = project_root / 'data' / 'historical' / 'BTCUSDT-1h-full.csv'
+    h4_csv = project_root / 'data' / 'historical' / f'{args.pair}-4h-full.csv'
+    h1_csv = project_root / 'data' / 'historical' / f'{args.pair}-1h-full.csv'
+    m15_csv = project_root / 'data' / 'historical' / f'{args.pair}-15m-full.csv'
 
     # Check files exist
     if not h4_csv.exists():
@@ -91,17 +108,25 @@ def main():
         logger.error(f"H1 data not found: {h1_csv}")
         sys.exit(1)
 
+    # Check 15m data if confirmation enabled
+    if args.use_confirmation:
+        if not m15_csv.exists():
+            logger.error(f"15m data not found: {m15_csv}")
+            logger.error("Download 15m data or run without --use-confirmation")
+            sys.exit(1)
+
     # Initialize engine
     engine = BacktestEngine(
         h4_csv_path=str(h4_csv),
         h1_csv_path=str(h1_csv),
-        m15_csv_path=None,  # No 15m data available
+        m15_csv_path=str(m15_csv) if args.use_confirmation else None,
         initial_balance=args.initial_balance,
         risk_per_trade=args.risk_per_trade,
         fee_rate=args.fee_rate,
         slippage=args.slippage,
         tp_percent=args.tp_percent,
-        sl_percent=args.sl_percent
+        sl_percent=args.sl_percent,
+        use_confirmation=args.use_confirmation,
     )
 
     # Validate month requires year
@@ -152,6 +177,18 @@ def main():
         print(f"SL Exits:          {sl_trades} ({sl_trades/metrics.total_trades*100:.1f}%)")
         print(f"Timeout Exits:     {timeout_trades} ({timeout_trades/metrics.total_trades*100:.1f}%)")
         print("=" * 60)
+
+    # Export to CSV if flag is set
+    if args.export_csv:
+        output_dir = project_root / 'data' / 'backtest_results'
+        csv_path = engine.export_to_csv(
+            output_path=str(output_dir),
+            pair=args.pair,
+            year=args.year
+        )
+
+        if csv_path:
+            print(f"\nCSV exported to: {csv_path}")
 
     logger.info("Backtest completed successfully")
 
