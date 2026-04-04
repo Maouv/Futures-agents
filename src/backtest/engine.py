@@ -229,10 +229,10 @@ class BacktestEngine:
                 continue
 
             # ── Hitung position size (fixed risk) ─────────────────────
-            # Formula: (risk_usd * leverage) / risk_distance
-            # Convert risk_per_trade (percentage) to USD based on balance
+            # Formula: risk_usd / risk_distance (leverage tidak mempengaruhi position size)
+            # Leverage hanya mempengaruhi margin requirement, bukan risk
             risk_usd = self.initial_balance * self.risk_per_trade
-            position_size = (risk_usd * LEVERAGE) / risk_distance
+            position_size = risk_usd / risk_distance
             margin_required = (position_size * entry_price) / LEVERAGE
 
             debug_counters['signals_found'] += 1
