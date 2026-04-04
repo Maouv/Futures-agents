@@ -85,12 +85,13 @@ class RiskAgent(BaseAgent):
             tp_price = entry_price - (risk_distance * rr_ratio)
 
         # Calculate position size
-        # Formula: (Risk USD * leverage) / risk_distance
+        # Formula: Risk USD / risk_distance (leverage tidak mempengaruhi position size)
         leverage = settings.FUTURES_DEFAULT_LEVERAGE
         risk_usd = settings.RISK_PER_TRADE_USD
-        position_size = (risk_usd * leverage) / risk_distance
+        position_size = risk_usd / risk_distance
 
         # Calculate margin required
+        # Margin = (Position Size * Entry Price) / Leverage
         margin_required = (position_size * entry_price) / leverage
 
         # Calculate actual reward

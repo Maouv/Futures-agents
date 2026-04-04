@@ -37,7 +37,11 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
         for trade in open_trades:
             price = current_prices.get(trade.pair)
             if price is None:
-                logger.warning(f"Harga untuk {trade.pair} tidak ditemukan, skip")
+                logger.error(
+                    f"CRITICAL: Harga untuk {trade.pair} tidak ditemukan! "
+                    f"Trade ID {trade.id} tidak dapat di-monitor. "
+                    f"Pairs yang tersedia: {list(current_prices.keys())}"
+                )
                 continue
 
             hit_tp = False
