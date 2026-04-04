@@ -86,7 +86,7 @@ MARKET DATA:
 STRATEGY RULES:
 - Only trade when H4 trend aligns with H1 signal
 - Entry at 50% of Order Block (midpoint)
-- Risk/Reward: 1:2.5
+- Risk/Reward: 1:{settings.RISK_REWARD_RATIO}
 
 Respond in JSON only:
 {{"action": "LONG|SHORT|SKIP", "confidence": 0-100, "reasoning": "brief explanation"}}"""

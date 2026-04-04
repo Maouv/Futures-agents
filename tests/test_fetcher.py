@@ -3,9 +3,10 @@ test_fetcher.py — Unit tests untuk safety checks di ohlcv_fetcher.
 Fokus: Gap Detector dan Session Filter.
 """
 import pytest
+import pandas as pd
 from datetime import datetime, timezone
 
-from src.data.ohlcv_fetcher import detect_gap, is_trading_session
+from src.data.ohlcv_fetcher import detect_gap_in_batch, is_trading_session
 
 
 class TestSessionFilter:
@@ -36,20 +37,38 @@ class TestSessionFilter:
 
 class TestGapDetector:
     def test_no_gap_returns_false(self):
-        last = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-        new = datetime(2024, 1, 1, 12, 15, tzinfo=timezone.utc)
-        assert detect_gap(last, new) is False
+        """Test bahwa gap detector return False untuk data yang berurutan."""
+        dates = pd.date_range(start='2024-01-01 12:00', periods=5, freq='15min', tz='UTC')
+        df = pd.DataFrame({'timestamp': dates})
+        assert detect_gap_in_batch(df, '15m') is False
 
     def test_gap_over_threshold_returns_true(self):
-        last = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-        new = datetime(2024, 1, 1, 12, 20, tzinfo=timezone.utc)  # 20 menit > 16
-        assert detect_gap(last, new) is True
+        """Test bahwa gap detector return True untuk gap > threshold."""
+        # Create data dengan gap 35 menit (melebihi threshold 30 menit untuk 15m timeframe)
+        # Threshold = GAP_MULTIPLIER (2) × 15m = 30 menit
+        dates = [
+            datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 12, 15, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 12, 50, tzinfo=timezone.utc),  # Gap 35 menit > 30 menit threshold!
+        ]
+        df = pd.DataFrame({'timestamp': dates})
+        assert detect_gap_in_batch(df, '15m') is True
 
-    def test_none_last_timestamp_no_gap(self):
-        new = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-        assert detect_gap(None, new) is False  # First run
+    def test_single_candle_no_gap(self):
+        """Test bahwa single candle tidak men trigger gap."""
+        dates = [datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)]
+        df = pd.DataFrame({'timestamp': dates})
+        assert detect_gap_in_batch(df, '15m') is False
 
     def test_exactly_16_minutes_no_gap(self):
-        last = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-        new = datetime(2024, 1, 1, 12, 16, tzinfo=timezone.utc)  # Tepat 16 = masih OK
-        assert detect_gap(last, new) is False
+        """Test bahwa gap tepat 16 menit tidak dianggap gap (threshold = 16)."""
+        dates = [
+            datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 12, 16, tzinfo=timezone.utc),  # Tepat 16 menit
+        ]
+        df = pd.DataFrame({'timestamp': dates})
+        # Note: detect_gap_in_batch menggunakan threshold berbeda per timeframe
+        # Untuk 15m, threshold = 16 * 1.1 = 17.6 menit
+        # Jadi 16 menit masih OK
+        assert detect_gap_in_batch(df, '15m') is False
+

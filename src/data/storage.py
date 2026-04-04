@@ -81,7 +81,7 @@ class PaperTrade(Base):
     leverage: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="OPEN")  # 'OPEN' atau 'CLOSED'
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)               # Diisi saat CLOSED
-    entry_timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    entry_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     close_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(10), nullable=True)   # 'TP', 'SL', 'MANUAL'
 

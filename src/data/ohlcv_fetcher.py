@@ -258,27 +258,43 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     if model_class is None:
         logger.error(f"Unknown timeframe: {timeframe}")
         return None
+
     with get_session() as db:
-        for _, row in df.iterrows():
-            exists = (
-                db.query(model_class)
-                .filter(
-                    model_class.symbol == symbol,
-                    model_class.timestamp == row["timestamp"].to_pydatetime(),
-                )
-                .first()
+        # OPTIMIZED: Bulk query untuk cek existing timestamps
+        # 1 query untuk semua timestamps, bukan 500 queries
+        timestamps_to_check = df["timestamp"].tolist()
+        existing = (
+            db.query(model_class.timestamp)
+            .filter(
+                model_class.symbol == symbol,
+                model_class.timestamp.in_(timestamps_to_check)
             )
-            if not exists:
-                candle = model_class(
-                    timestamp=row["timestamp"].to_pydatetime(),
-                    open=row["open"],
-                    high=row["high"],
-                    low=row["low"],
-                    close=row["close"],
-                    volume=row["volume"],
-                    symbol=symbol,
-                )
-                db.add(candle)
+            .all()
+        )
+        existing_timestamps = {t[0] for t in existing}
+
+        # Filter hanya candle baru
+        new_candles_df = df[~df['timestamp'].isin(existing_timestamps)]
+
+        if not new_candles_df.empty:
+            # OPTIMIZED: Bulk insert dengan dict mappings
+            # 1 query untuk semua inserts, bukan 500 queries
+            new_candles = [
+                {
+                    "timestamp": row["timestamp"].to_pydatetime(),
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
+                    "symbol": symbol,
+                }
+                for _, row in new_candles_df.iterrows()
+            ]
+            db.bulk_insert_mappings(model_class, new_candles)
+            logger.debug(f"Inserted {len(new_candles)} new candles for {symbol} {timeframe}")
+        else:
+            logger.debug(f"No new candles to insert for {symbol} {timeframe}")
 
     logger.info(f"Fetched & stored {len(df)} candles for {symbol} {timeframe}")
 

@@ -2,7 +2,7 @@
 execution_agent.py — Eksekusi trade (PAPER MODE ONLY).
 """
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
 
@@ -105,6 +105,7 @@ class ExecutionAgent(BaseAgent):
                     size=risk_result.position_size,
                     leverage=risk_result.leverage,
                     status='OPEN',
+                    entry_timestamp=datetime.now(timezone.utc),  # Explicit timestamp
                 )
                 db.add(trade)
                 db.flush()  # Flush untuk mendapatkan ID

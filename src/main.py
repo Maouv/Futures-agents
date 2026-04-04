@@ -24,146 +24,155 @@ from src.utils.logger import logger, setup_logger
 
 SYMBOL = "BTCUSDT"
 
-# Global event loop reference untuk background thread
-_event_loop = None
 
-
-def _send_notification_sync(message: str):
+class TradingBot:
     """
-    Helper untuk mengirim notifikasi dari background thread.
-    Menggunakan asyncio.run_coroutine_threadsafe untuk schedule coroutine ke main event loop.
+    Orchestrator utama dengan proper encapsulation.
+    Menghilangkan global variables untuk better testability.
     """
-    global _event_loop
-    if _event_loop is None:
-        logger.error("Event loop not initialized. Cannot send notification.")
-        return
 
-    try:
-        # Schedule coroutine ke main event loop
-        future = asyncio.run_coroutine_threadsafe(
-            send_notification(message),
-            _event_loop
-        )
-        # Wait hingga selesai (timeout 10 detik)
-        future.result(timeout=10)
-    except Exception as e:
-        logger.error(f"Failed to send notification: {e}")
+    def __init__(self):
+        self.event_loop = None
+        self.scheduler = None
 
-
-def run_trading_cycle():
-    """
-    Siklus utama 15 menit:
-    Fetch Data → Math Agents → LLM Analyst → Risk → Execution → SLTP Check
-    """
-    logger.info(f"=== CYCLE START {datetime.now(timezone.utc).strftime('%H:%M UTC')} ===")
-
-    try:
-        # ── 1. Fetch Data ──────────────────────────────────────────────
-        df_h4  = fetch_ohlcv(SYMBOL, '4h')
-        df_h1  = fetch_ohlcv(SYMBOL, '1h')
-        df_15m = fetch_ohlcv(SYMBOL, '15m')
-
-        if df_h4 is None or df_h1 is None or df_15m is None:
-            logger.warning("Data fetch failed or gap detected. Skipping cycle.")
+    def send_notification_sync(self, message: str):
+        """
+        Helper untuk mengirim notifikasi dari background thread.
+        Menggunakan asyncio.run_coroutine_threadsafe untuk schedule coroutine ke main event loop.
+        """
+        if self.event_loop is None:
+            logger.error("Event loop not initialized. Cannot send notification.")
             return
 
-        # ── 2. Session Filter ──────────────────────────────────────────
-        if df_15m.attrs.get('skip_trade', False):
-            logger.info("Outside trading session. Checking SLTP only.")
-            _run_sltp_check(df_15m)
-            return
+        try:
+            # Schedule coroutine ke main event loop
+            future = asyncio.run_coroutine_threadsafe(
+                send_notification(message),
+                self.event_loop
+            )
+            # Wait hingga selesai (timeout 10 detik)
+            future.result(timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to send notification: {e}")
 
-        current_price = float(df_15m['close'].iloc[-1])
+    def run_trading_cycle(self):
+        """
+        Siklus utama 15 menit:
+        Fetch Data → Math Agents → LLM Analyst → Risk → Execution → SLTP Check
+        """
+        logger.info(f"=== CYCLE START {datetime.now(timezone.utc).strftime('%H:%M UTC')} ===")
 
-        # ── 3. Math Agents ─────────────────────────────────────────────
-        trend        = TrendAgent().run(df_h4)
-        reversal     = ReversalAgent().run(df_h1, swing_size=3)
-        confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
+        try:
+            # ── 1. Fetch Data ──────────────────────────────────────────────
+            df_h4  = fetch_ohlcv(SYMBOL, '4h')
+            df_h1  = fetch_ohlcv(SYMBOL, '1h')
+            df_15m = fetch_ohlcv(SYMBOL, '15m')
 
-        logger.info(f"Trend: {trend.bias_label} | Signal: {reversal.signal} | Confirmed: {confirmation.confirmed}")
+            if df_h4 is None or df_h1 is None or df_15m is None:
+                logger.warning("Data fetch failed or gap detected. Skipping cycle.")
+                return
 
-        # ── 4. LLM Analyst ─────────────────────────────────────────────
-        decision = run_analyst(trend, reversal, confirmation, current_price)
-        logger.info(f"Analyst: {decision.action} (confidence: {decision.confidence}) [{decision.source}]")
+            # ── 2. Session Filter ──────────────────────────────────────────
+            if df_15m.attrs.get('skip_trade', False):
+                logger.info("Outside trading session. Checking SLTP only.")
+                self._run_sltp_check(df_15m)
+                return
 
-        # ── 5. Risk & Execution ────────────────────────────────────────
-        if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
-            if reversal.ob is not None:
-                risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
-                result = ExecutionAgent().run(
-                    symbol=SYMBOL,
-                    risk_result=risk,
-                    reversal_result=reversal,
-                    trend_result=trend,
-                    confirmation_confirmed=confirmation.confirmed,
-                )
+            current_price = float(df_15m['close'].iloc[-1])
 
-                if result.action == 'OPEN':
-                    _send_notification_sync(
-                        f"🔔 Paper {decision.action}\n"
-                        f"Entry: ${risk.entry_price:,.2f}\n"
-                        f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
-                        f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
+            # ── 3. Math Agents ─────────────────────────────────────────────
+            trend        = TrendAgent().run(df_h4)
+            reversal     = ReversalAgent().run(df_h1, swing_size=3)
+            confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
+
+            logger.info(f"Trend: {trend.bias_label} | Signal: {reversal.signal} | Confirmed: {confirmation.confirmed}")
+
+            # ── 4. LLM Analyst ─────────────────────────────────────────────
+            decision = run_analyst(trend, reversal, confirmation, current_price)
+            logger.info(f"Analyst: {decision.action} (confidence: {decision.confidence}) [{decision.source}]")
+
+            # ── 5. Risk & Execution ────────────────────────────────────────
+            if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
+                if reversal.ob is not None:
+                    risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
+                    result = ExecutionAgent().run(
+                        symbol=SYMBOL,
+                        risk_result=risk,
+                        reversal_result=reversal,
+                        trend_result=trend,
+                        confirmation_confirmed=confirmation.confirmed,
                     )
+
+                    if result.action == 'OPEN':
+                        self.send_notification_sync(
+                            f"🔔 Paper {decision.action}\n"
+                            f"Entry: ${risk.entry_price:,.2f}\n"
+                            f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
+                            f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
+                        )
+                else:
+                    logger.info("No OB available for entry. Skipping.")
             else:
-                logger.info("No OB available for entry. Skipping.")
-        else:
-            logger.info(f"SKIP — {decision.reasoning}")
+                logger.info(f"SKIP — {decision.reasoning}")
 
-        # ── 6. SLTP Check ──────────────────────────────────────────────
-        _run_sltp_check(df_15m)
+            # ── 6. SLTP Check ──────────────────────────────────────────────
+            self._run_sltp_check(df_15m)
 
-    except Exception as e:
-        logger.error(f"Cycle error: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Cycle error: {e}", exc_info=True)
 
+    def _run_sltp_check(self, df_15m):
+        """Cek SL/TP paper trades dengan harga close 15m terbaru."""
+        current_price = float(df_15m['close'].iloc[-1])
+        closed = check_paper_trades({SYMBOL: current_price})
 
-def _run_sltp_check(df_15m):
-    """Cek SL/TP paper trades dengan harga close 15m terbaru."""
-    current_price = float(df_15m['close'].iloc[-1])
-    closed = check_paper_trades({SYMBOL: current_price})
+        for trade in closed:
+            emoji = "✅" if trade['pnl'] > 0 else "❌"
+            self.send_notification_sync(
+                f"{emoji} {trade['reason']} Hit\n"
+                f"{trade['pair']} {trade['side']}\n"
+                f"PnL: ${trade['pnl']:.2f}"
+            )
 
-    for trade in closed:
-        emoji = "✅" if trade['pnl'] > 0 else "❌"
-        _send_notification_sync(
-            f"{emoji} {trade['reason']} Hit\n"
-            f"{trade['pair']} {trade['side']}\n"
-            f"PnL: ${trade['pnl']:.2f}"
+    def run(self):
+        """Entry point utama."""
+        setup_logger()
+        logger.info(f"Starting Futures Agent | Mode: {settings.EXECUTION_MODE.upper()}")
+
+        # Init DB
+        init_db()
+
+        # Buat event loop untuk main thread
+        self.event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.event_loop)
+
+        # Scheduler — jalankan di background thread
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.add_job(
+            self.run_trading_cycle,
+            CronTrigger(minute='0,15,30,45'),
+            id='trading_cycle',
+            max_instances=1,  # Jangan overlap
+            misfire_grace_time=60,
         )
+        self.scheduler.start()
+        logger.info("Scheduler started. Trading cycle every 15 minutes.")
+
+        # Telegram bot di main thread
+        app = create_bot_app()
+        logger.info("Telegram bot started.")
+
+        try:
+            app.run_polling(drop_pending_updates=True)
+        except KeyboardInterrupt:
+            self.scheduler.shutdown()
+            logger.info("Bot stopped.")
 
 
 def main():
-    global _event_loop
-    setup_logger()
-    logger.info(f"Starting Futures Agent | Mode: {settings.EXECUTION_MODE.upper()}")
-
-    # Init DB
-    init_db()
-
-    # Buat event loop untuk main thread
-    _event_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_event_loop)
-
-    # Scheduler — jalankan di background thread
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(
-        run_trading_cycle,
-        CronTrigger(minute='0,15,30,45'),
-        id='trading_cycle',
-        max_instances=1,  # Jangan overlap
-        misfire_grace_time=60,
-    )
-    scheduler.start()
-    logger.info("Scheduler started. Trading cycle every 15 minutes.")
-
-    # Telegram bot di main thread
-    app = create_bot_app()
-    logger.info("Telegram bot started.")
-
-    try:
-        app.run_polling(drop_pending_updates=True)
-    except KeyboardInterrupt:
-        scheduler.shutdown()
-        logger.info("Bot stopped.")
+    """Wrapper untuk backward compatibility."""
+    bot = TradingBot()
+    bot.run()
 
 
 if __name__ == "__main__":

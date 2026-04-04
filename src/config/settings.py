@@ -35,19 +35,41 @@ class Settings(BaseSettings):
     @field_validator('BINANCE_API_KEY', 'BINANCE_API_SECRET')
     @classmethod
     def validate_production_credentials(cls, v, info):
-        """Pastikan credential production ada jika USE_TESTNET=False"""
-        if not info.data.get('USE_TESTNET', False):
+        """
+        Pastikan credential production ada jika:
+        - EXECUTION_MODE='live' DAN
+        - USE_TESTNET=False
+        """
+        execution_mode = info.data.get('EXECUTION_MODE', 'paper')
+        use_testnet = info.data.get('USE_TESTNET', False)
+
+        # Hanya wajib jika live mode dan tidak pakai testnet
+        if execution_mode == 'live' and not use_testnet:
             if v is None:
-                raise ValueError('BINANCE_API_KEY dan BINANCE_API_SECRET wajib jika USE_TESTNET=False')
+                raise ValueError(
+                    'BINANCE_API_KEY dan BINANCE_API_SECRET wajib jika '
+                    'EXECUTION_MODE=live dan USE_TESTNET=False'
+                )
         return v
 
     @field_validator('BINANCE_TESTNET_KEY', 'BINANCE_TESTNET_SECRET')
     @classmethod
     def validate_testnet_credentials(cls, v, info):
-        """Pastikan credential testnet ada jika USE_TESTNET=True"""
-        if info.data.get('USE_TESTNET', False):
+        """
+        Pastikan credential testnet ada jika:
+        - EXECUTION_MODE='live' DAN
+        - USE_TESTNET=True
+        """
+        execution_mode = info.data.get('EXECUTION_MODE', 'paper')
+        use_testnet = info.data.get('USE_TESTNET', False)
+
+        # Hanya wajib jika live mode dan pakai testnet
+        if execution_mode == 'live' and use_testnet:
             if v is None:
-                raise ValueError('BINANCE_TESTNET_KEY dan BINANCE_TESTNET_SECRET wajib jika USE_TESTNET=True')
+                raise ValueError(
+                    'BINANCE_TESTNET_KEY dan BINANCE_TESTNET_SECRET wajib jika '
+                    'EXECUTION_MODE=live dan USE_TESTNET=True'
+                )
         return v
 
     # ── Futures Trading Params ───────────────────────────────────────────────

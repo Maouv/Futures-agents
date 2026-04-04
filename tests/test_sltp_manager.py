@@ -26,6 +26,8 @@ class TestSLTPManagerMultiPair:
         Test bahwa jika ada trade dengan pair yang tidak ada di price dict,
         akan log ERROR (bukan WARNING).
         """
+        from datetime import datetime, timezone
+
         # Setup: Buat 2 paper trades dengan pair berbeda
         with get_session() as db:
             # Trade BTCUSDT - ada di price dict
@@ -37,7 +39,8 @@ class TestSLTPManagerMultiPair:
                 tp_price=67400.0,
                 size=0.05,
                 leverage=10,
-                status='OPEN'
+                status='OPEN',
+                entry_timestamp=datetime.now(timezone.utc)
             )
             # Trade ETHUSDT - TIDAK ada di price dict
             trade2 = PaperTrade(
@@ -48,7 +51,8 @@ class TestSLTPManagerMultiPair:
                 tp_price=3600.0,
                 size=0.5,
                 leverage=10,
-                status='OPEN'
+                status='OPEN',
+                entry_timestamp=datetime.now(timezone.utc)
             )
             db.add(trade1)
             db.add(trade2)
@@ -73,6 +77,8 @@ class TestSLTPManagerMultiPair:
         """
         Test bahwa jika semua pair ada di price dict, tidak ada error.
         """
+        from datetime import datetime, timezone
+
         # Setup: Buat 2 trades
         with get_session() as db:
             trade1 = PaperTrade(
@@ -83,7 +89,8 @@ class TestSLTPManagerMultiPair:
                 tp_price=67400.0,
                 size=0.05,
                 leverage=10,
-                status='OPEN'
+                status='OPEN',
+                entry_timestamp=datetime.now(timezone.utc)
             )
             trade2 = PaperTrade(
                 pair='ETHUSDT',
@@ -93,7 +100,8 @@ class TestSLTPManagerMultiPair:
                 tp_price=3400.0,
                 size=0.5,
                 leverage=10,
-                status='OPEN'
+                status='OPEN',
+                entry_timestamp=datetime.now(timezone.utc)
             )
             db.add(trade1)
             db.add(trade2)
@@ -119,6 +127,8 @@ class TestSLTPManagerMultiPair:
         """
         Test bahwa error log menyertakan context: trade ID dan available pairs.
         """
+        from datetime import datetime, timezone
+
         # Setup
         with get_session() as db:
             trade = PaperTrade(
@@ -129,7 +139,8 @@ class TestSLTPManagerMultiPair:
                 tp_price=0.55,
                 size=100.0,
                 leverage=10,
-                status='OPEN'
+                status='OPEN',
+                entry_timestamp=datetime.now(timezone.utc)
             )
             db.add(trade)
             db.commit()
