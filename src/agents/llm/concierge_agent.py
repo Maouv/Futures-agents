@@ -26,7 +26,7 @@ def run_concierge(
     try:
         client = openai.OpenAI(
             api_key=settings.CONCIERGE_API_KEY.get_secret_value(),
-            base_url=str(settings.CONCIERGE_BASE_URL).rstrip('/chat/completions'),
+            base_url=str(settings.CONCIERGE_BASE_URL).replace('/chat/completions', ''),
             timeout=settings.CONCIERGE_TIMEOUT_SEC,
         )
 

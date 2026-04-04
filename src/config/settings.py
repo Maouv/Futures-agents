@@ -3,8 +3,9 @@ settings.py — Single source of truth untuk semua konfigurasi.
 Menggunakan pydantic-settings untuk validasi otomatis saat startup.
 Jika ada env var yang missing, aplikasi akan CRASH dengan ValidationError (by design).
 """
-from pydantic import Field, HttpUrl, SecretStr
+from pydantic import Field, HttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -22,14 +23,32 @@ class Settings(BaseSettings):
     # ── Binance Futures (Production) ─────────────────────────────────────────
     BINANCE_REST_URL: HttpUrl = Field(default="https://fapi.binance.com")
     BINANCE_WS_URL: str = Field(default="wss://fstream.binance.com/ws")
-    BINANCE_API_KEY: SecretStr = Field(..., description="Binance Futures API Key")
-    BINANCE_API_SECRET: SecretStr = Field(..., description="Binance Futures API Secret")
+    BINANCE_API_KEY: Optional[SecretStr] = Field(None, description="Binance Futures API Key (wajib jika USE_TESTNET=False)")
+    BINANCE_API_SECRET: Optional[SecretStr] = Field(None, description="Binance Futures API Secret (wajib jika USE_TESTNET=False)")
 
     # ── Binance Testnet ──────────────────────────────────────────────────────
     BINANCE_TESTNET_URL: HttpUrl = Field(default="https://testnet.binancefuture.com")
     BINANCE_TESTNET_WS_URL: str = Field(default="wss://stream.binancefuture.com/ws")
-    BINANCE_TESTNET_KEY: SecretStr = Field(..., description="Binance Testnet API Key")
-    BINANCE_TESTNET_SECRET: SecretStr = Field(..., description="Binance Testnet API Secret")
+    BINANCE_TESTNET_KEY: Optional[SecretStr] = Field(None, description="Binance Testnet API Key (wajib jika USE_TESTNET=True)")
+    BINANCE_TESTNET_SECRET: Optional[SecretStr] = Field(None, description="Binance Testnet API Secret (wajib jika USE_TESTNET=True)")
+
+    @field_validator('BINANCE_API_KEY', 'BINANCE_API_SECRET')
+    @classmethod
+    def validate_production_credentials(cls, v, info):
+        """Pastikan credential production ada jika USE_TESTNET=False"""
+        if not info.data.get('USE_TESTNET', False):
+            if v is None:
+                raise ValueError('BINANCE_API_KEY dan BINANCE_API_SECRET wajib jika USE_TESTNET=False')
+        return v
+
+    @field_validator('BINANCE_TESTNET_KEY', 'BINANCE_TESTNET_SECRET')
+    @classmethod
+    def validate_testnet_credentials(cls, v, info):
+        """Pastikan credential testnet ada jika USE_TESTNET=True"""
+        if info.data.get('USE_TESTNET', False):
+            if v is None:
+                raise ValueError('BINANCE_TESTNET_KEY dan BINANCE_TESTNET_SECRET wajib jika USE_TESTNET=True')
+        return v
 
     # ── Futures Trading Params ───────────────────────────────────────────────
     FUTURES_MARGIN_TYPE: str = Field(default="isolated", description="'isolated' atau 'cross'")

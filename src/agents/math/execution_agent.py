@@ -52,7 +52,11 @@ class ExecutionAgent(BaseAgent):
         # GUARD CLAUSE WAJIB ADA
         if os.getenv("EXECUTION_MODE") == "live":
             # Phase 8 — belum diimplementasi
-            raise NotImplementedError("Live execution diimplementasi di Phase 8")
+            self._log_error("Live execution belum diimplementasi (Phase 8). Skipping.")
+            return ExecutionResult(
+                action="SKIP",
+                reason="Live mode belum diimplementasi. Gunakan paper mode."
+            )
 
         # Validasi sebelum eksekusi
         # 1. Trend harus searah dengan signal

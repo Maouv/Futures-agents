@@ -42,6 +42,22 @@ TIMEFRAME_MAP = {
     "4h": ("ohlcv_h4", OHLCVCandleH4),
 }
 
+# Singleton exchange instance
+_exchange_instance: Optional[ccxt.binanceusdm] = None
+
+
+def _get_exchange() -> ccxt.binanceusdm:
+    """
+    Get or create singleton ccxt exchange instance.
+    Menghindari pembuatan instance baru setiap fetch yang bisa exhaust connection pool.
+    """
+    global _exchange_instance
+
+    if _exchange_instance is None:
+        _exchange_instance = _create_exchange()
+
+    return _exchange_instance
+
 
 def _create_exchange() -> ccxt.binanceusdm:
     """
@@ -209,7 +225,7 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     Note: Session filter (FR-1.3) TIDAK menghentikan fetch/store.
     Session filter hanya memberikan flag ke caller via df.attrs['skip_trade'].
     """
-    exchange = _create_exchange()
+    exchange = _get_exchange()
 
     # Get fetch limit based on timeframe
     limit = FETCH_LIMITS.get(timeframe, 500)

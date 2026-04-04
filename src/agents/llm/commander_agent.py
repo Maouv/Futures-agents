@@ -33,7 +33,7 @@ ALLOWED_FUNCTIONS = [
 def run_commander(user_message: str) -> CommanderResult:
     client = openai.OpenAI(
         api_key=settings.GROQ_API_KEY.get_secret_value(),
-        base_url=str(settings.GROQ_BASE_URL).rstrip('/chat/completions'),
+        base_url=str(settings.GROQ_BASE_URL).replace('/chat/completions', ''),
         timeout=settings.LLM_FAST_TIMEOUT_SEC,
     )
 

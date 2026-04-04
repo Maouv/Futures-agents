@@ -69,7 +69,7 @@ def run_analyst(
     """
     client = openai.OpenAI(
         api_key=settings.CEREBRAS_API_KEY.get_secret_value(),
-        base_url=str(settings.CEREBRAS_BASE_URL).rstrip('/chat/completions'),
+        base_url=str(settings.CEREBRAS_BASE_URL).replace('/chat/completions', ''),
         timeout=settings.LLM_FAST_TIMEOUT_SEC,
     )
 
