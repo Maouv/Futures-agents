@@ -19,7 +19,6 @@ from src.agents.math.trend_agent import TrendAgent, TrendResult
 from src.agents.math.reversal_agent import ReversalAgent, ReversalResult
 from src.agents.math.confirmation_agent import ConfirmationAgent, ConfirmationResult
 from src.indicators.helpers import calculate_atr
-from src.indicators.mean_reversion import calculate_mean_reversion
 from src.config.settings import settings
 from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
 
@@ -196,6 +195,10 @@ class BacktestEngine:
                     balance += trade.pnl
                     position = None
 
+            # Skip kalau masih ada posisi terbuka
+            if position is not None:
+                continue
+
             # ── Map H1 ke H4 ─────────────────────────────────────────────
             h4_index = i // 4
             if h4_index < 50:
@@ -262,90 +265,6 @@ class BacktestEngine:
             if risk_distance < 1.0:  # Minimum $1 risk distance untuk BTC
                 continue
 
-            # ══════════════════════════════════════════════════════════════
-            # VALID SIGNAL FOUND - Check if position already open
-            # ══════════════════════════════════════════════════════════════
-
-            # ── Calculate additional features for RL training ──────────────
-            # RSI dari mean_reversion
-            try:
-                mean_rev_result = calculate_mean_reversion(df_h1_slice)
-                rsi_value = mean_rev_result.rsi
-            except Exception as e:
-                logger.warning(f"Failed to calculate RSI: {e}")
-                rsi_value = 50.0
-
-            # BOS/CHOCH type
-            bos_type = "NONE"
-            if reversal_result.bos_choch:
-                bias_label = "BULLISH" if reversal_result.bos_choch.bias == 1 else "BEARISH"
-                bos_type = f"{bias_label}_{reversal_result.bos_choch.type}"
-
-            # OB size
-            ob_size = ob.high - ob.low
-
-            # Distance to OB
-            distance_to_ob = abs(current_close - entry_price)
-
-            # FVG present
-            fvg_present = reversal_result.fvg is not None
-
-            # Candle body ratio
-            candle_open = df_h1['open'].iloc[i]
-            candle_close = df_h1['close'].iloc[i]
-            candle_high = df_h1['high'].iloc[i]
-            candle_low = df_h1['low'].iloc[i]
-            candle_range = candle_high - candle_low
-            candle_body_ratio = abs(candle_close - candle_open) / candle_range if candle_range > 0 else 0.0
-
-            # Hour of day (UTC)
-            from datetime import datetime
-            entry_dt = datetime.utcfromtimestamp(current_time / 1000)
-            hour_of_day = entry_dt.hour
-
-            # Consecutive losses
-            consecutive_losses = 0
-            for trade in reversed(self.trades):
-                if trade.pnl < 0:
-                    consecutive_losses += 1
-                else:
-                    break
-
-            # Time since last trade (minutes)
-            time_since_last_trade = 0
-            if self.trades:
-                last_trade_time = self.trades[-1].entry_time
-                time_diff_ms = current_time - last_trade_time
-                time_since_last_trade = int(time_diff_ms / 60000)  # Convert ms to minutes
-
-            # Current drawdown percentage
-            current_drawdown_pct = 0.0
-            if balance < self.initial_balance:
-                current_drawdown_pct = ((self.initial_balance - balance) / self.initial_balance) * 100
-
-            # ── Check if position already open (SKIPPED signal) ───────────
-            if position is not None:
-                # Valid signal found but position already open → SKIPPED
-                skipped_trade = self._record_skipped_signal(
-                    current_time=current_time,
-                    signal=signal,
-                    trend_bias=trend_result.bias_label,
-                    confidence=reversal_result.confidence,
-                    atr=atr,
-                    ob=ob,
-                    reversal_result=reversal_result,
-                    rsi=rsi_value,
-                    hour_of_day=hour_of_day,
-                    consecutive_losses=consecutive_losses,
-                    time_since_last_trade=time_since_last_trade,
-                    current_drawdown_pct=current_drawdown_pct,
-                    current_close=current_close,
-                )
-                self.trades.append(skipped_trade)
-                debug_counters['signals_found'] += 1
-                logger.info(f"Signal SKIPPED [{signal}] - position already open at candle {i}")
-                continue
-
             # ── Hitung position size (fixed risk) ─────────────────────
             # Formula: risk_usd / risk_distance (leverage tidak mempengaruhi position size)
             # Leverage hanya mempengaruhi margin requirement, bukan risk
@@ -375,17 +294,6 @@ class BacktestEngine:
                 'ob_low':        ob.low,
                 'trend_bias':    trend_result.bias_label,
                 'confidence':    reversal_result.confidence,
-                # New fields for RL training
-                'bos_type':      bos_type,
-                'ob_size':       ob_size,
-                'distance_to_ob': distance_to_ob,
-                'rsi':           rsi_value,
-                'fvg_present':   fvg_present,
-                'candle_body_ratio': candle_body_ratio,
-                'hour_of_day':   hour_of_day,
-                'consecutive_losses': consecutive_losses,
-                'time_since_last_trade': time_since_last_trade,
-                'current_drawdown_pct': current_drawdown_pct,
             }
 
         # ── Hitung metrics ────────────────────────────────────────────────
@@ -415,72 +323,6 @@ class BacktestEngine:
         logger.info("=" * 60)
 
         return metrics
-
-    # ── Helper: Record SKIPPED signal ────────────────────────────────────────
-
-    def _record_skipped_signal(
-        self,
-        current_time: int,
-        signal: str,
-        trend_bias: str,
-        confidence: int,
-        atr: float,
-        ob,
-        reversal_result,
-        rsi: float,
-        hour_of_day: int,
-        consecutive_losses: int,
-        time_since_last_trade: int,
-        current_drawdown_pct: float,
-        current_close: float,
-    ) -> TradeResult:
-        """Record a signal that was skipped because position already open."""
-        # Calculate features
-        entry_price = (ob.high + ob.low) / 2.0
-        ob_size = ob.high - ob.low
-        distance_to_ob = abs(current_close - entry_price)
-        fvg_present = reversal_result.fvg is not None
-
-        # BOS type
-        bos_type = "NONE"
-        if reversal_result.bos_choch:
-            bias_label = "BULLISH" if reversal_result.bos_choch.bias == 1 else "BEARISH"
-            bos_type = f"{bias_label}_{reversal_result.bos_choch.type}"
-
-        # Candle body ratio (use last candle)
-        # Note: We don't have candle data here, set to 0.0
-        candle_body_ratio = 0.0
-
-        return TradeResult(
-            entry_time=current_time,
-            exit_time=current_time,
-            entry_price=entry_price,
-            exit_price=entry_price,
-            side=signal,
-            size=0.0,  # No position
-            pnl=0.0,
-            pnl_percent=0.0,
-            fee=0.0,
-            exit_reason='SKIPPED',
-            sl_price=0.0,
-            tp_price=0.0,
-            candles_held=0,
-            atr=atr,
-            ob_high=ob.high,
-            ob_low=ob.low,
-            trend_bias=trend_bias,
-            confidence=confidence,
-            bos_type=bos_type,
-            ob_size=ob_size,
-            distance_to_ob=distance_to_ob,
-            rsi=rsi,
-            fvg_present=fvg_present,
-            candle_body_ratio=candle_body_ratio,
-            hour_of_day=hour_of_day,
-            consecutive_losses=consecutive_losses,
-            time_since_last_trade=time_since_last_trade,
-            current_drawdown_pct=current_drawdown_pct,
-        )
 
     # ── Exit check ───────────────────────────────────────────────────────────
 
@@ -584,26 +426,16 @@ class BacktestEngine:
             ob_low=position.get('ob_low', 0.0),
             trend_bias=position.get('trend_bias', 'RANGING'),
             confidence=position.get('confidence', 0),
-            bos_type=position.get('bos_type', 'NONE'),
-            ob_size=position.get('ob_size', 0.0),
-            distance_to_ob=position.get('distance_to_ob', 0.0),
-            rsi=position.get('rsi', 50.0),
-            fvg_present=position.get('fvg_present', False),
-            candle_body_ratio=position.get('candle_body_ratio', 0.0),
-            hour_of_day=position.get('hour_of_day', 0),
-            consecutive_losses=position.get('consecutive_losses', 0),
-            time_since_last_trade=position.get('time_since_last_trade', 0),
-            current_drawdown_pct=position.get('current_drawdown_pct', 0.0),
         )
 
     # ── Export to CSV ─────────────────────────────────────────────────────────
 
     def export_to_csv(self, output_path: str, pair: str = "BTCUSDT", year: Optional[int] = None) -> str:
         """
-        Export trades to CSV file for RL training.
+        Export trades to CSV file.
 
         Args:
-            output_path: Directory path untuk menyimpan CSV (akan di-override ke data/rl_training/)
+            output_path: Directory path untuk menyimpan CSV
             pair: Trading pair (e.g., 'BTCUSDT')
             year: Year filter untuk filename
 
@@ -614,36 +446,32 @@ class BacktestEngine:
             logger.warning("No trades to export")
             return ""
 
-        # Override output path ke data/rl_training/
-        project_root = Path(__file__).parent.parent.parent
-        output_dir = project_root / 'data' / 'rl_training'
+        # Create output directory jika belum ada
+        output_dir = Path(output_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename: {PAIR}_{YEAR}.csv
+        # Generate filename
         year_str = str(year) if year else "all"
-        filename = f"{pair}_{year_str}.csv"
+        filename = f"{pair}_{year_str}_signals.csv"
         filepath = output_dir / filename
 
-        # Define CSV columns (sesuai requirement)
+        # Define CSV columns
         fieldnames = [
-            'timestamp',
+            'timestamp_entry',
+            'timestamp_exit',
             'pair',
-            'trend_bias',
-            'bos_type',
+            'signal',
+            'entry_price',
+            'sl_price',
+            'tp_price',
+            'outcome',
+            'pnl',
+            'candles_held',
+            'atr',
             'ob_high',
             'ob_low',
-            'ob_size',
-            'distance_to_ob',
-            'atr',
-            'rsi',
-            'fvg_present',
-            'candle_body_ratio',
-            'hour_of_day',
-            'consecutive_losses',
-            'time_since_last_trade',
-            'current_drawdown_pct',
-            'outcome',
-            'pnl'
+            'trend_bias',
+            'confidence'
         ]
 
         # Write to CSV
@@ -654,24 +482,21 @@ class BacktestEngine:
 
                 for trade in self.trades:
                     writer.writerow({
-                        'timestamp': trade.entry_time,
+                        'timestamp_entry': trade.entry_time,
+                        'timestamp_exit': trade.exit_time,
                         'pair': pair,
-                        'trend_bias': trade.trend_bias,
-                        'bos_type': trade.bos_type,
-                        'ob_high': f"{trade.ob_high:.2f}",
-                        'ob_low': f"{trade.ob_low:.2f}",
-                        'ob_size': f"{trade.ob_size:.2f}",
-                        'distance_to_ob': f"{trade.distance_to_ob:.2f}",
-                        'atr': f"{trade.atr:.2f}",
-                        'rsi': f"{trade.rsi:.2f}",
-                        'fvg_present': trade.fvg_present,
-                        'candle_body_ratio': f"{trade.candle_body_ratio:.4f}",
-                        'hour_of_day': trade.hour_of_day,
-                        'consecutive_losses': trade.consecutive_losses,
-                        'time_since_last_trade': trade.time_since_last_trade,
-                        'current_drawdown_pct': f"{trade.current_drawdown_pct:.2f}",
+                        'signal': trade.side,
+                        'entry_price': f"{trade.entry_price:.2f}",
+                        'sl_price': f"{trade.sl_price:.2f}",
+                        'tp_price': f"{trade.tp_price:.2f}",
                         'outcome': trade.exit_reason,
                         'pnl': f"{trade.pnl:.2f}",
+                        'candles_held': trade.candles_held,
+                        'atr': f"{trade.atr:.2f}",
+                        'ob_high': f"{trade.ob_high:.2f}",
+                        'ob_low': f"{trade.ob_low:.2f}",
+                        'trend_bias': trade.trend_bias,
+                        'confidence': trade.confidence,
                     })
 
             logger.info(f"Exported {len(self.trades)} trades to {filepath}")
