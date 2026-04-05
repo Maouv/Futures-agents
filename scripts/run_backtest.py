@@ -176,9 +176,8 @@ def main():
 
         # Export to CSV if flag is set
         if args.export_csv:
-            output_dir = project_root / 'data' / 'backtest_results'
             csv_path = engine.export_to_csv(
-                output_path=str(output_dir),
+                output_path="",  # Will be overridden to data/rl_training/
                 pair=pair,
                 year=args.year
             )

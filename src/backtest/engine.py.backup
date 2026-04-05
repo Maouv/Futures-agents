@@ -196,6 +196,10 @@ class BacktestEngine:
                     balance += trade.pnl
                     position = None
 
+            # Skip kalau masih ada posisi terbuka
+            if position is not None:
+                continue
+
             # ── Map H1 ke H4 ─────────────────────────────────────────────
             h4_index = i // 4
             if h4_index < 50:
@@ -262,9 +266,12 @@ class BacktestEngine:
             if risk_distance < 1.0:  # Minimum $1 risk distance untuk BTC
                 continue
 
-            # ══════════════════════════════════════════════════════════════
-            # VALID SIGNAL FOUND - Check if position already open
-            # ══════════════════════════════════════════════════════════════
+            # ── Hitung position size (fixed risk) ─────────────────────
+            # Formula: risk_usd / risk_distance (leverage tidak mempengaruhi position size)
+            # Leverage hanya mempengaruhi margin requirement, bukan risk
+            risk_usd = self.initial_balance * self.risk_per_trade
+            position_size = risk_usd / risk_distance
+            margin_required = (position_size * entry_price) / LEVERAGE
 
             # ── Calculate additional features for RL training ──────────────
             # RSI dari mean_reversion
@@ -322,36 +329,6 @@ class BacktestEngine:
             current_drawdown_pct = 0.0
             if balance < self.initial_balance:
                 current_drawdown_pct = ((self.initial_balance - balance) / self.initial_balance) * 100
-
-            # ── Check if position already open (SKIPPED signal) ───────────
-            if position is not None:
-                # Valid signal found but position already open → SKIPPED
-                skipped_trade = self._record_skipped_signal(
-                    current_time=current_time,
-                    signal=signal,
-                    trend_bias=trend_result.bias_label,
-                    confidence=reversal_result.confidence,
-                    atr=atr,
-                    ob=ob,
-                    reversal_result=reversal_result,
-                    rsi=rsi_value,
-                    hour_of_day=hour_of_day,
-                    consecutive_losses=consecutive_losses,
-                    time_since_last_trade=time_since_last_trade,
-                    current_drawdown_pct=current_drawdown_pct,
-                    current_close=current_close,
-                )
-                self.trades.append(skipped_trade)
-                debug_counters['signals_found'] += 1
-                logger.info(f"Signal SKIPPED [{signal}] - position already open at candle {i}")
-                continue
-
-            # ── Hitung position size (fixed risk) ─────────────────────
-            # Formula: risk_usd / risk_distance (leverage tidak mempengaruhi position size)
-            # Leverage hanya mempengaruhi margin requirement, bukan risk
-            risk_usd = self.initial_balance * self.risk_per_trade
-            position_size = risk_usd / risk_distance
-            margin_required = (position_size * entry_price) / LEVERAGE
 
             debug_counters['signals_found'] += 1
             logger.info(
@@ -415,72 +392,6 @@ class BacktestEngine:
         logger.info("=" * 60)
 
         return metrics
-
-    # ── Helper: Record SKIPPED signal ────────────────────────────────────────
-
-    def _record_skipped_signal(
-        self,
-        current_time: int,
-        signal: str,
-        trend_bias: str,
-        confidence: int,
-        atr: float,
-        ob,
-        reversal_result,
-        rsi: float,
-        hour_of_day: int,
-        consecutive_losses: int,
-        time_since_last_trade: int,
-        current_drawdown_pct: float,
-        current_close: float,
-    ) -> TradeResult:
-        """Record a signal that was skipped because position already open."""
-        # Calculate features
-        entry_price = (ob.high + ob.low) / 2.0
-        ob_size = ob.high - ob.low
-        distance_to_ob = abs(current_close - entry_price)
-        fvg_present = reversal_result.fvg is not None
-
-        # BOS type
-        bos_type = "NONE"
-        if reversal_result.bos_choch:
-            bias_label = "BULLISH" if reversal_result.bos_choch.bias == 1 else "BEARISH"
-            bos_type = f"{bias_label}_{reversal_result.bos_choch.type}"
-
-        # Candle body ratio (use last candle)
-        # Note: We don't have candle data here, set to 0.0
-        candle_body_ratio = 0.0
-
-        return TradeResult(
-            entry_time=current_time,
-            exit_time=current_time,
-            entry_price=entry_price,
-            exit_price=entry_price,
-            side=signal,
-            size=0.0,  # No position
-            pnl=0.0,
-            pnl_percent=0.0,
-            fee=0.0,
-            exit_reason='SKIPPED',
-            sl_price=0.0,
-            tp_price=0.0,
-            candles_held=0,
-            atr=atr,
-            ob_high=ob.high,
-            ob_low=ob.low,
-            trend_bias=trend_bias,
-            confidence=confidence,
-            bos_type=bos_type,
-            ob_size=ob_size,
-            distance_to_ob=distance_to_ob,
-            rsi=rsi,
-            fvg_present=fvg_present,
-            candle_body_ratio=candle_body_ratio,
-            hour_of_day=hour_of_day,
-            consecutive_losses=consecutive_losses,
-            time_since_last_trade=time_since_last_trade,
-            current_drawdown_pct=current_drawdown_pct,
-        )
 
     # ── Exit check ───────────────────────────────────────────────────────────
 
