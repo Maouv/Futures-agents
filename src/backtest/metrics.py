@@ -30,7 +30,6 @@ class TradeResult(BaseModel):
     bos_type: str = "NONE"        # 'BULLISH_BOS', 'BULLISH_CHOCH', 'BEARISH_BOS', 'BEARISH_CHOCH', 'NONE'
     ob_size: float = 0.0          # OB high - low
     distance_to_ob: float = 0.0   # Distance from entry to OB midpoint
-    rsi: float = 50.0             # RSI value from mean_reversion
     fvg_present: bool = False     # Is FVG present as confluence
     candle_body_ratio: float = 0.0  # abs(close - open) / (high - low)
     hour_of_day: int = 0          # Hour in UTC (0-23)

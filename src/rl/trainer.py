@@ -56,7 +56,7 @@ class DQNTrainer:
         self,
         csv_dir: str = "data/rl_training",
         output_dir: str = "data/rl_models",
-        state_size: int = 14,
+        state_size: int = 13,
         action_size: int = 2,
         device: str = None
     ) -> None:
@@ -342,7 +342,7 @@ def main():
     trainer = DQNTrainer(
         csv_dir="data/rl_training",
         output_dir="data/rl_models",
-        state_size=14,
+        state_size=13,
         action_size=2
     )
 

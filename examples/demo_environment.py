@@ -88,7 +88,7 @@ def demo_basic_usage():
 def demo_custom_policy():
     """Demo dengan simple threshold-based policy."""
     print("\n" + "=" * 60)
-    print("CUSTOM POLICY DEMO (RSI Threshold)")
+    print("CUSTOM POLICY DEMO (Trend-Based Policy)")
     print("=" * 60)
 
     csv_path = "data/rl_training/BTCUSDT_2024.csv"
@@ -100,23 +100,23 @@ def demo_custom_policy():
     step = 0
     total_reward = 0.0
 
-    print("\nPolicy: ENTRY jika RSI < 40, SKIP jika RSI >= 40")
+    print("\nPolicy: ENTRY jika trend != RANGING, SKIP jika RANGING")
     print("-" * 60)
 
     while not done:
-        # Get current row untuk check RSI
+        # Get current row untuk check trend_bias
         current_row = env.data.iloc[env.current_step]
-        rsi_value = current_row['rsi']
+        trend_bias = current_row['trend_bias']
 
-        # Simple policy: ENTRY jika RSI oversold
-        action = 1 if rsi_value < 40 else 0
+        # Simple policy: ENTRY jika trending (bullish atau bearish), SKIP jika ranging
+        action = 1 if trend_bias != 0 else 0
 
         # Execute
         next_state, reward, done, info = env.step(action)
         total_reward += reward
 
         outcome = info['outcome']
-        print(f"Step {step+1:2d} | RSI: {rsi_value:5.2f} | Action: {action} | "
+        print(f"Step {step+1:2d} | Trend: {trend_bias:2.0f} | Action: {action} | "
               f"Outcome: {outcome:8s} | Reward: {reward:+6.3f}")
 
         step += 1

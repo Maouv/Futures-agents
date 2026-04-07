@@ -38,7 +38,6 @@ def test_trade_result_fields():
         bos_type='BULLISH_BOS',
         ob_size=100.0,
         distance_to_ob=25.0,
-        rsi=35.5,
         fvg_present=True,
         candle_body_ratio=0.65,
         hour_of_day=14,
@@ -53,7 +52,7 @@ def test_trade_result_fields():
         'side', 'size', 'pnl', 'pnl_percent', 'fee', 'exit_reason',
         'sl_price', 'tp_price', 'candles_held', 'atr',
         'ob_high', 'ob_low', 'trend_bias', 'confidence',
-        'bos_type', 'ob_size', 'distance_to_ob', 'rsi',
+        'bos_type', 'ob_size', 'distance_to_ob',
         'fvg_present', 'candle_body_ratio', 'hour_of_day',
         'consecutive_losses', 'time_since_last_trade',
         'current_drawdown_pct'
@@ -89,7 +88,6 @@ def test_trade_result_fields():
         bos_type='BULLISH_BOS',
         ob_size=100.0,
         distance_to_ob=25.0,
-        rsi=35.5,
         fvg_present=True,
         candle_body_ratio=0.0,  # Will be 0 for SKIPPED
         hour_of_day=14,
@@ -118,7 +116,6 @@ def test_csv_fieldnames():
         'ob_size',
         'distance_to_ob',
         'atr',
-        'rsi',
         'fvg_present',
         'candle_body_ratio',
         'hour_of_day',
@@ -153,8 +150,7 @@ def main():
         print("✓ ALL TESTS PASSED")
         print("=" * 60)
         print("\nField Summary:")
-        print("  - 17 fields as requested: ✓")
-        print("  - RSI from calculate_mean_reversion: ✓")
+        print("  - 16 fields as requested: ✓")
         print("  - Outcome includes SKIPPED: ✓")
         print("  - Location: data/rl_training/{PAIR}_{YEAR}.csv: ✓")
         return 0

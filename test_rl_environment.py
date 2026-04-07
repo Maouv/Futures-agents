@@ -35,7 +35,6 @@ class TestTradingEnvironment:
             'ob_size': [359.90, 359.90, 455.10, 323.40, 500.00],
             'distance_to_ob': [130.25, 154.05, 1634.05, 223.50, 100.00],
             'atr': [362.47, 341.81, 403.54, 457.08, 400.00],
-            'rsi': [43.85, 44.30, 74.35, 65.70, 30.00],
             'fvg_present': [False, False, True, True, False],
             'candle_body_ratio': [0.0000, 0.5360, 0.9444, 0.0000, 0.5000],
             'hour_of_day': [13, 12, 3, 0, 10],
@@ -56,7 +55,7 @@ class TestTradingEnvironment:
 
         assert env.strategy_name == 'SMC'
         assert env.max_steps == 5
-        assert env.observation_space == 14
+        assert env.observation_space == 13
         assert env.action_space == 2
 
     def test_categorical_encoding(self, sample_csv):
@@ -81,7 +80,7 @@ class TestTradingEnvironment:
         state = env.reset()
 
         # Check shape
-        assert state.shape == (14,)
+        assert state.shape == (13,)
 
         # Check normalized range
         assert np.all(state >= 0.0)
@@ -245,7 +244,6 @@ class TestTradingEnvironment:
             'ob_size': [1000.0] * 3,
             'distance_to_ob': [100.0] * 3,
             'atr': [300.0] * 3,
-            'rsi': [50.0] * 3,
             'fvg_present': [True] * 3,
             'candle_body_ratio': [0.5] * 3,
             'hour_of_day': [10] * 3,

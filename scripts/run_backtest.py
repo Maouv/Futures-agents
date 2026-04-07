@@ -8,6 +8,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
+from typing import List
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -177,7 +178,7 @@ def main():
         # Export to CSV if flag is set
         if args.export_csv:
             csv_path = engine.export_to_csv(
-                output_path="",  # Will be overridden to data/rl_training/
+                output_path=str(project_root / 'data' / 'rl_training'),
                 pair=pair,
                 year=args.year
             )

@@ -22,18 +22,18 @@ class QNetwork(nn.Module):
     """
     Deep Q-Network dengan architecture [input, 128, 64, output].
 
-    Input: 14 features (state_size)
+    Input: 13 features (state_size)
     Hidden layers: 128 -> 64 neurons
     Output: 2 Q-values (action_size: SKIP=0, ENTRY=1)
     Activation: ReLU
     """
 
-    def __init__(self, state_size: int = 14, action_size: int = 2) -> None:
+    def __init__(self, state_size: int = 13, action_size: int = 2) -> None:
         """
         Initialize Q-Network.
 
         Args:
-            state_size: Dimensi state observation (default: 14)
+            state_size: Dimensi state observation (default: 13)
             action_size: Jumlah actions (default: 2)
         """
         super(QNetwork, self).__init__()
@@ -76,7 +76,7 @@ class DQNAgent:
 
     def __init__(
         self,
-        state_size: int = 14,
+        state_size: int = 13,
         action_size: int = 2,
         lr: float = 0.001,
         gamma: float = 0.95,
@@ -88,7 +88,7 @@ class DQNAgent:
         Initialize DQN Agent.
 
         Args:
-            state_size: Dimensi state (default: 14)
+            state_size: Dimensi state (default: 13)
             action_size: Jumlah actions (default: 2)
             lr: Learning rate (default: 0.001)
             gamma: Discount factor (default: 0.95)

@@ -56,7 +56,7 @@ class TradingEnvironment:
         self.state_columns = [
             'trend_bias', 'bos_type',
             'ob_high', 'ob_low', 'ob_size', 'distance_to_ob',
-            'atr', 'rsi', 'fvg_present', 'candle_body_ratio',
+            'atr', 'fvg_present', 'candle_body_ratio',
             'hour_of_day', 'consecutive_losses',
             'time_since_last_trade', 'current_drawdown_pct'
         ]
@@ -282,7 +282,6 @@ class TradingEnvironment:
             print(f"\n=== Step {self.current_step + 1}/{self.max_steps} ===")
             print(f"Pair: {current_row['pair']}")
             print(f"Trend Bias: {current_row['trend_bias']}")
-            print(f"RSI: {current_row['rsi']:.2f}")
             print(f"ATR: {current_row['atr']:.2f}")
             print(f"FVG Present: {bool(current_row['fvg_present'])}")
             print(f"Outcome: {current_row['outcome']}")

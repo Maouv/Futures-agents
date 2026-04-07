@@ -24,7 +24,7 @@ from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
 
 
 # ── Konstanta strategi (sesuai settings.py) ─────────────────────────────────
-RISK_PER_TRADE_USD = 1.0       # Fixed $10 risk per trade
+RISK_PER_TRADE_USD = settings.RISK_PER_TRADE_USD  # Fixed risk per trade (from .env)
 LEVERAGE           = 10         # Leverage default
 RISK_REWARD_RATIO  = settings.RISK_REWARD_RATIO
 ATR_SL_MULTIPLIER  = 1.0        # SL = OB edge ± (ATR × 0.5)
@@ -78,6 +78,10 @@ class BacktestEngine:
 
         self.trades: List[TradeResult] = []
 
+        # State tracking for RL features
+        self._last_trade_exit_time: Optional[int] = None
+        self._consecutive_losses: int = 0
+
     # ── Data loading ─────────────────────────────────────────────────────────
 
     def load_csv(self, path: str) -> pd.DataFrame:
@@ -99,6 +103,41 @@ class BacktestEngine:
 
         logger.info(f"Loaded {len(df)} candles from {path}")
         return df
+
+    # ── Helper methods for RL state tracking ───────────────────────────────────
+
+    def _calculate_consecutive_losses(self) -> int:
+        """Calculate consecutive losses from recent trades."""
+        if not self.trades:
+            return 0
+
+        consecutive = 0
+        # Iterate backwards through trades
+        for trade in reversed(self.trades):
+            if trade.pnl < 0:
+                consecutive += 1
+            else:
+                break  # Stop at first winning trade
+
+        return consecutive
+
+    def _calculate_time_since_last_trade(self, current_time: int) -> int:
+        """Calculate minutes since last trade exit."""
+        if self._last_trade_exit_time is None:
+            return 0
+
+        time_diff_ms = current_time - self._last_trade_exit_time
+        time_diff_minutes = time_diff_ms // 60000  # Convert ms to minutes
+
+        return time_diff_minutes
+
+    def _calculate_drawdown_pct(self, current_balance: float) -> float:
+        """Calculate current drawdown percentage from peak."""
+        if current_balance >= self.initial_balance:
+            return 0.0
+
+        drawdown = ((self.initial_balance - current_balance) / self.initial_balance) * 100
+        return drawdown
 
     # ── Main backtest loop ───────────────────────────────────────────────────
 
@@ -193,6 +232,14 @@ class BacktestEngine:
                     )
                     self.trades.append(trade)
                     balance += trade.pnl
+
+                    # Update state tracking for next trades
+                    self._last_trade_exit_time = trade.exit_time
+                    if trade.pnl < 0:
+                        self._consecutive_losses += 1
+                    else:
+                        self._consecutive_losses = 0  # Reset on win
+
                     position = None
 
             # Skip kalau masih ada posisi terbuka
@@ -268,7 +315,7 @@ class BacktestEngine:
             # ── Hitung position size (fixed risk) ─────────────────────
             # Formula: risk_usd / risk_distance (leverage tidak mempengaruhi position size)
             # Leverage hanya mempengaruhi margin requirement, bukan risk
-            risk_usd = self.initial_balance * self.risk_per_trade
+            risk_usd = RISK_PER_TRADE_USD  # Fixed risk from .env (not percentage of balance)
             position_size = risk_usd / risk_distance
             margin_required = (position_size * entry_price) / LEVERAGE
 
@@ -278,6 +325,17 @@ class BacktestEngine:
                 f"Entry: {entry_price:.2f} | SL: {sl_price:.2f} | TP: {tp_price:.2f} | "
                 f"Size: {position_size:.6f} | Margin: ${margin_required:.2f}"
             )
+
+            # Calculate candle body ratio for RL feature
+            current_candle = df_h1.iloc[i]
+            candle_range = current_candle['high'] - current_candle['low']
+            candle_body = abs(current_candle['close'] - current_candle['open'])
+            candle_body_ratio = candle_body / candle_range if candle_range > 0 else 0.0
+
+            # Calculate distance from current candle close to OB midpoint
+            current_close = current_candle['close']
+            ob_midpoint = (ob.high + ob.low) / 2.0
+            distance_to_ob = abs(current_close - ob_midpoint)
 
             position = {
                 'entry_time':    current_time,
@@ -294,6 +352,11 @@ class BacktestEngine:
                 'ob_low':        ob.low,
                 'trend_bias':    trend_result.bias_label,
                 'confidence':    reversal_result.confidence,
+                # RL training features
+                'bos_choch':     reversal_result.bos_choch,
+                'fvg_present':   reversal_result.fvg is not None,
+                'candle_body_ratio': candle_body_ratio,
+                'distance_to_ob': distance_to_ob,
             }
 
         # ── Hitung metrics ────────────────────────────────────────────────
@@ -407,6 +470,29 @@ class BacktestEngine:
         # Calculate candles held
         candles_held = exit_index - position['entry_index']
 
+        # ── Populate RL training fields ─────────────────────────────────────
+        # Extract BOS type
+        bos_type = "NONE"
+        if position.get('bos_choch'):
+            bc = position['bos_choch']
+            if bc.bias == 1:  # BULLISH
+                bos_type = "BULLISH_BOS" if bc.type == "BOS" else "BULLISH_CHOCH"
+            else:  # BEARISH
+                bos_type = "BEARISH_BOS" if bc.type == "BOS" else "BEARISH_CHOCH"
+
+        # Calculate OB size and distance
+        ob_size = position.get('ob_high', 0.0) - position.get('ob_low', 0.0)
+        distance_to_ob = position.get('distance_to_ob', 0.0)
+
+        # Extract hour of day from entry timestamp
+        entry_dt = pd.to_datetime(position['entry_time'], unit='ms', utc=True)
+        hour_of_day = entry_dt.hour
+
+        # Calculate state tracking features
+        consecutive_losses = self._calculate_consecutive_losses()
+        time_since_last_trade = self._calculate_time_since_last_trade(position['entry_time'])
+        current_drawdown_pct = self._calculate_drawdown_pct(position['balance_at_entry'])
+
         return TradeResult(
             entry_time=position['entry_time'],
             exit_time=exit_time,
@@ -426,6 +512,16 @@ class BacktestEngine:
             ob_low=position.get('ob_low', 0.0),
             trend_bias=position.get('trend_bias', 'RANGING'),
             confidence=position.get('confidence', 0),
+            # RL training fields
+            bos_type=bos_type,
+            ob_size=ob_size,
+            distance_to_ob=distance_to_ob,
+            fvg_present=position.get('fvg_present', False),
+            candle_body_ratio=position.get('candle_body_ratio', 0.0),
+            hour_of_day=hour_of_day,
+            consecutive_losses=consecutive_losses,
+            time_since_last_trade=time_since_last_trade,
+            current_drawdown_pct=current_drawdown_pct,
         )
 
     # ── Export to CSV ─────────────────────────────────────────────────────────
@@ -455,10 +551,9 @@ class BacktestEngine:
         filename = f"{pair}_{year_str}_signals.csv"
         filepath = output_dir / filename
 
-        # Define CSV columns
+        # Define CSV columns (RL training format - matches environment expectations)
         fieldnames = [
-            'timestamp_entry',
-            'timestamp_exit',
+            'timestamp',           # Changed from 'timestamp_entry' for environment compatibility
             'pair',
             'signal',
             'entry_price',
@@ -470,7 +565,16 @@ class BacktestEngine:
             'atr',
             'ob_high',
             'ob_low',
+            'ob_size',
+            'distance_to_ob',
             'trend_bias',
+            'bos_type',
+            'fvg_present',
+            'candle_body_ratio',
+            'hour_of_day',
+            'consecutive_losses',
+            'time_since_last_trade',
+            'current_drawdown_pct',
             'confidence'
         ]
 
@@ -482,8 +586,7 @@ class BacktestEngine:
 
                 for trade in self.trades:
                     writer.writerow({
-                        'timestamp_entry': trade.entry_time,
-                        'timestamp_exit': trade.exit_time,
+                        'timestamp': trade.entry_time,  # Use entry_time as timestamp for RL
                         'pair': pair,
                         'signal': trade.side,
                         'entry_price': f"{trade.entry_price:.2f}",
@@ -495,7 +598,16 @@ class BacktestEngine:
                         'atr': f"{trade.atr:.2f}",
                         'ob_high': f"{trade.ob_high:.2f}",
                         'ob_low': f"{trade.ob_low:.2f}",
+                        'ob_size': f"{trade.ob_size:.2f}",
+                        'distance_to_ob': f"{trade.distance_to_ob:.2f}",
                         'trend_bias': trade.trend_bias,
+                        'bos_type': trade.bos_type,
+                        'fvg_present': int(trade.fvg_present),
+                        'candle_body_ratio': f"{trade.candle_body_ratio:.4f}",
+                        'hour_of_day': trade.hour_of_day,
+                        'consecutive_losses': trade.consecutive_losses,
+                        'time_since_last_trade': trade.time_since_last_trade,
+                        'current_drawdown_pct': f"{trade.current_drawdown_pct:.2f}",
                         'confidence': trade.confidence,
                     })
 
