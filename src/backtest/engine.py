@@ -25,7 +25,7 @@ from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
 
 # ── Konstanta strategi (sesuai settings.py) ─────────────────────────────────
 RISK_PER_TRADE_USD = settings.RISK_PER_TRADE_USD  # Fixed risk per trade (from .env)
-LEVERAGE           = 10         # Leverage default
+LEVERAGE           = settings.FUTURES_DEFAULT_LEVERAGE  # From .env (default=10, override in .env)
 RISK_REWARD_RATIO  = settings.RISK_REWARD_RATIO
 ATR_SL_MULTIPLIER  = 1.0        # SL = OB edge ± (ATR × 0.5)
 FEE_RATE           = 0.0005     # 0.05% taker fee per side
@@ -60,6 +60,9 @@ class BacktestEngine:
         tp_percent: float = 0.02,
         sl_percent: float = 0.01,
         use_confirmation: bool = False,
+        use_rl: bool = False,
+        rl_model_path: str = "data/rl_models/best_model.onnx",
+        rl_norm_path: str = "data/rl_models/normalization_params.npz",
     ):
         self.h4_csv_path  = h4_csv_path
         self.h1_csv_path  = h1_csv_path
@@ -71,6 +74,7 @@ class BacktestEngine:
         self.tp_percent = tp_percent
         self.sl_percent = sl_percent
         self.use_confirmation = use_confirmation
+        self.use_rl = use_rl
 
         self.trend_agent        = TrendAgent()
         self.reversal_agent     = ReversalAgent()
@@ -81,6 +85,20 @@ class BacktestEngine:
         # State tracking for RL features
         self._last_trade_exit_time: Optional[int] = None
         self._consecutive_losses: int = 0
+
+        # RL inference engine
+        self._rl_engine = None
+        if self.use_rl:
+            try:
+                from src.rl.inference import load_inference_engine
+                self._rl_engine = load_inference_engine(
+                    model_path=rl_model_path,
+                    norm_params_path=rl_norm_path
+                )
+                logger.info(f"RL filter ENABLED - model: {rl_model_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load RL model: {e}. Running without RL filter.")
+                self.use_rl = False
 
     # ── Data loading ─────────────────────────────────────────────────────────
 
@@ -105,6 +123,62 @@ class BacktestEngine:
         return df
 
     # ── Helper methods for RL state tracking ───────────────────────────────────
+
+    def _build_rl_state(
+        self,
+        trend_bias: str,
+        bos_choch: Optional[object],
+        ob_high: float,
+        ob_low: float,
+        ob_size: float,
+        distance_to_ob: float,
+        atr: float,
+        fvg_present: bool,
+        candle_body_ratio: float,
+        entry_time: int,
+    ) -> "np.ndarray":
+        """Build 13-feature state vector for RL inference."""
+        import numpy as np
+
+        # Encode trend_bias
+        trend_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGING': 0}
+        trend_bias_val = trend_map.get(trend_bias, 0)
+
+        # Encode bos_type
+        bos_type_val = 0
+        if bos_choch is not None:
+            if bos_choch.bias == 1:
+                bos_type_val = 1 if bos_choch.type == "BOS" else 1  # BULLISH
+            else:
+                bos_type_val = -1 if bos_choch.type == "BOS" else -1  # BEARISH
+
+        # Extract hour
+        entry_dt = pd.to_datetime(entry_time, unit='ms', utc=True)
+        hour_of_day = entry_dt.hour
+
+        # State tracking features
+        consecutive_losses = self._calculate_consecutive_losses()
+        time_since_last_trade = self._calculate_time_since_last_trade(entry_time)
+        current_drawdown_pct = self._calculate_drawdown_pct(self.initial_balance)
+
+        # Build state vector (13 features, must match environment.py state_columns)
+        state = np.array([
+            trend_bias_val,          # 1. trend_bias
+            bos_type_val,            # 2. bos_type
+            ob_high,                 # 3. ob_high
+            ob_low,                  # 4. ob_low
+            ob_size,                 # 5. ob_size
+            distance_to_ob,          # 6. distance_to_ob
+            atr,                     # 7. atr
+            int(fvg_present),        # 8. fvg_present
+            candle_body_ratio,       # 9. candle_body_ratio
+            hour_of_day,             # 10. hour_of_day
+            consecutive_losses,      # 11. consecutive_losses
+            time_since_last_trade,   # 12. time_since_last_trade
+            current_drawdown_pct,    # 13. current_drawdown_pct
+        ], dtype=np.float32)
+
+        return state
 
     def _calculate_consecutive_losses(self) -> int:
         """Calculate consecutive losses from recent trades."""
@@ -309,7 +383,7 @@ class BacktestEngine:
                 tp_price = entry_price - (abs(entry_price - sl_price) * RISK_REWARD_RATIO)
 
             risk_distance = abs(entry_price - sl_price)
-            if risk_distance < 1.0:  # Minimum $1 risk distance untuk BTC
+            if risk_distance < (atr * 0.5 ):  # Minimum $1 risk distance untuk BTC
                 continue
 
             # ── Hitung position size (fixed risk) ─────────────────────
@@ -358,6 +432,41 @@ class BacktestEngine:
                 'candle_body_ratio': candle_body_ratio,
                 'distance_to_ob': distance_to_ob,
             }
+
+            # ── RL Filter: Skip trade if RL model disagrees ──────────────
+            if self.use_rl and self._rl_engine is not None:
+                ob_size = ob.high - ob.low
+                rl_state = self._build_rl_state(
+                    trend_bias=trend_result.bias_label,
+                    bos_choch=reversal_result.bos_choch,
+                    ob_high=ob.high,
+                    ob_low=ob.low,
+                    ob_size=ob_size,
+                    distance_to_ob=distance_to_ob,
+                    atr=atr,
+                    fvg_present=reversal_result.fvg is not None,
+                    candle_body_ratio=candle_body_ratio,
+                    entry_time=current_time,
+                )
+
+                action, q_values = self._rl_engine.select_action(rl_state, strategy="greedy")
+                confidence = self._rl_engine.get_state_importance(rl_state)
+
+                if action == 0:  # RL says SKIP
+                    debug_counters['rl_skipped'] = debug_counters.get('rl_skipped', 0) + 1
+                    logger.info(
+                        f"RL SKIP candle {i} | "
+                        f"Q-values: [{q_values[0]:.4f}, {q_values[1]:.4f}] | "
+                        f"Confidence: {confidence:.4f}"
+                    )
+                    continue
+                else:
+                    debug_counters['rl_approved'] = debug_counters.get('rl_approved', 0) + 1
+                    logger.info(
+                        f"RL APPROVE candle {i} | "
+                        f"Q-values: [{q_values[0]:.4f}, {q_values[1]:.4f}] | "
+                        f"Confidence: {confidence:.4f}"
+                    )
 
         # ── Hitung metrics ────────────────────────────────────────────────
         metrics = calculate_metrics(self.trades, initial_balance=self.initial_balance)

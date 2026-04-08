@@ -269,8 +269,8 @@ class DQNTrainer:
         norm_path = self.output_dir / "normalization_params.npz"
         np.savez(
             str(norm_path),
-            state_mean=np.zeros(14, dtype=np.float32),  # Placeholder
-            state_std=np.ones(14, dtype=np.float32)     # Placeholder
+            state_mean=np.zeros(13, dtype=np.float32),  # 13 features (not 14!)
+            state_std=np.ones(13, dtype=np.float32)     # 13 features (not 14!)
         )
 
     def _save_checkpoint(self, episode: int) -> None:

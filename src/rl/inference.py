@@ -40,8 +40,8 @@ class DQNInference:
 
         Args:
             model_path: Path ke ONNX model file (.onnx)
-            state_mean: Mean untuk state normalization (shape: (14,))
-            state_std: Std untuk state normalization (shape: (14,))
+            state_mean: Mean untuk state normalization (shape: (13,))
+            state_std: Std untuk state normalization (shape: (13,))
             device: Device untuk inference ('cpu' atau 'cuda')
         """
         self.model_path = Path(model_path)
@@ -62,12 +62,12 @@ class DQNInference:
         # State normalization parameters
         # Jika tidak diberikan, gunakan default (no normalization)
         if state_mean is None:
-            self.state_mean = np.zeros(14, dtype=np.float32)
+            self.state_mean = np.zeros(13, dtype=np.float32)
         else:
             self.state_mean = state_mean.astype(np.float32)
 
         if state_std is None:
-            self.state_std = np.ones(14, dtype=np.float32)
+            self.state_std = np.ones(13, dtype=np.float32)
         else:
             self.state_std = state_std.astype(np.float32)
 
@@ -78,10 +78,10 @@ class DQNInference:
         Penting untuk menjaga konsistensi dengan training.
 
         Args:
-            state: Raw state observation (shape: (14,))
+            state: Raw state observation (shape: (13,))
 
         Returns:
-            Normalized state (shape: (14,))
+            Normalized state (shape: (13,))
         """
         # Avoid division by zero
         state_std_safe = np.where(self.state_std == 0, 1.0, self.state_std)
@@ -94,7 +94,7 @@ class DQNInference:
         Predict Q-values untuk state yang diberikan.
 
         Args:
-            state: State observation (shape: (14,))
+            state: State observation (shape: (13,))
 
         Returns:
             Q-values array (shape: (2,))
@@ -102,7 +102,7 @@ class DQNInference:
         # Normalize state
         normalized_state = self.normalize_state(state)
 
-        # Add batch dimension (ONNX expects shape: [batch_size, 14])
+        # Add batch dimension (ONNX expects shape: [batch_size, 13])
         state_batch = normalized_state.reshape(1, -1)
 
         # Run inference
@@ -129,7 +129,7 @@ class DQNInference:
         - epsilon: Tambahkan random exploration (epsilon=0.1)
 
         Args:
-            state: State observation (shape: (14,))
+            state: State observation (shape: (13,))
             strategy: Action selection strategy ('greedy' atau 'epsilon')
 
         Returns:
@@ -162,7 +162,7 @@ class DQNInference:
         Berguna untuk filtering: hanya ambil action jika confidence tinggi.
 
         Args:
-            state: State observation (shape: (14,))
+            state: State observation (shape: (13,))
 
         Returns:
             Confidence score (semakin tinggi = semakin yakin)
@@ -181,7 +181,7 @@ class DQNInference:
         Lebih efisien untuk inference banyak states.
 
         Args:
-            states: Array of states (shape: [N, 14])
+            states: Array of states (shape: [N, 13])
 
         Returns:
             Q-values untuk semua states (shape: [N, 2])

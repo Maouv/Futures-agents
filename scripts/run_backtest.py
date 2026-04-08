@@ -92,6 +92,11 @@ def main():
         action='store_true',
         help='Export trades to CSV file'
     )
+    parser.add_argument(
+        '--use-rl',
+        action='store_true',
+        help='Enable RL model filter (requires trained ONNX model)'
+    )
 
     args = parser.parse_args()
 
@@ -149,6 +154,7 @@ def main():
             tp_percent=args.tp_percent,
             sl_percent=args.sl_percent,
             use_confirmation=args.use_confirmation,
+            use_rl=args.use_rl,
         )
 
         # Run backtest for this pair

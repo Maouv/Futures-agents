@@ -1,0 +1,1 @@
+- [Bug: Risk Distance Threshold](bug_risk_distance_threshold.md) - Critical bug di engine.py baris 386 membunuh semua sinyal pair harga rendah
