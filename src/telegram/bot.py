@@ -29,7 +29,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_command:
         result = run_commander(message)
-        response = await _execute_command(result)
+        response = await _execute_command(result, int(chat_id))
     else:
         # Ambil context trade untuk Concierge
         trade_context = _get_trade_context()
@@ -38,11 +38,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
-async def _execute_command(result) -> str:
+async def _execute_command(result, chat_id: int = 0) -> str:
     """Eksekusi fungsi berdasarkan CommanderResult."""
     from src.telegram.commands import COMMAND_HANDLERS
     handler = COMMAND_HANDLERS.get(result.function_name)
     if handler:
+        # Pass chat_id untuk commands yang butuh per-chat state
+        import inspect
+        sig = inspect.signature(handler)
+        if 'chat_id' in sig.parameters:
+            return handler(chat_id=chat_id)
         return handler()
     return f"❓ Perintah tidak dikenali: {result.original_message}"
 
@@ -155,7 +160,8 @@ async def _cmd_close_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def _cmd_closeall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from src.telegram.commands import cmd_close_all_trades
-    await update.message.reply_text(cmd_close_all_trades())
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(cmd_close_all_trades(chat_id))
 
 async def _cmd_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from src.telegram.commands import cmd_switch_mode

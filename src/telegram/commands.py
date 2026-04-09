@@ -11,7 +11,12 @@ from src.utils.logger import logger
 
 
 # ── Two-step confirmation state ─────────────────────────────────────────────
-_pending_close_all = False
+import threading
+import time
+
+_pending_confirmations: dict[int, float] = {}  # {chat_id: timestamp}
+_CONFIRM_TIMEOUT_SEC = 30  # Konfirmasi hangus setelah 30 detik
+_pending_lock = threading.Lock()
 
 
 def cmd_menu() -> str:
@@ -236,11 +241,19 @@ def _close_live_trade(trade_id: int) -> str:
             return f"ERROR closing trade {trade_id}: {e}"
 
 
-def cmd_close_all_trades() -> str:
-    """Two-step close all trades."""
-    global _pending_close_all
+def cmd_close_all_trades(chat_id: int = 0) -> str:
+    """Two-step close all trades dengan per-chat confirmation + timeout."""
+    now = time.time()
 
-    if not _pending_close_all:
+    with _pending_lock:
+        # Bersihkan konfirmasi yang sudah expired
+        expired_keys = [k for k, ts in _pending_confirmations.items() if now - ts > _CONFIRM_TIMEOUT_SEC]
+        for k in expired_keys:
+            del _pending_confirmations[k]
+
+        is_pending = chat_id in _pending_confirmations
+
+    if not is_pending:
         with get_session() as db:
             count = db.query(PaperTrade).filter(
                 PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY'])
@@ -249,15 +262,18 @@ def cmd_close_all_trades() -> str:
         if count == 0:
             return "Tidak ada open/pending trades untuk di-close."
 
-        _pending_close_all = True
+        with _pending_lock:
+            _pending_confirmations[chat_id] = now
         return (
             f"Ada {count} open/pending trades.\n"
-            f"Kirim 'CONFIRM CLOSE ALL' untuk menutup SEMUA trade.\n"
+            f"Kirim 'CONFIRM CLOSE ALL' dalam {_CONFIRM_TIMEOUT_SEC} detik untuk menutup SEMUA trade.\n"
             f"Tindakan ini TIDAK bisa dibatalkan."
         )
 
-    # Step 2: Execute
-    _pending_close_all = False
+    # Step 2: Execute — hapus konfirmasi dulu
+    with _pending_lock:
+        _pending_confirmations.pop(chat_id, None)
+
     closed_count = 0
     errors = 0
 

@@ -247,7 +247,7 @@ class TestPhase8Settings:
         }, clear=False):
             s = Settings()
             assert s.CONFIRM_MAINNET is False
-            assert s.MAX_OPEN_POSITIONS == 2
+            assert s.MAX_OPEN_POSITIONS == 1
             assert s.ORDER_EXPIRY_CANDLES == 48
 
     def test_order_expiry_validation(self):

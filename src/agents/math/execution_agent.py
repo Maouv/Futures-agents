@@ -407,10 +407,11 @@ class ExecutionAgent(BaseAgent):
                 symbol=trade.pair,
                 type='stop_market',
                 side=close_side,
-                amount=None,  # closePosition=True, amount diabaikan
+                amount=filled_amount,
                 params={
                     'stopPrice': exchange.price_to_precision(trade.pair, trade.sl_price),
                     'closePosition': True,
+                    'reduceOnly': True,
                 }
             )
             sl_order_id = str(sl_order['id'])
@@ -430,10 +431,11 @@ class ExecutionAgent(BaseAgent):
                 symbol=trade.pair,
                 type='take_profit_market',
                 side=close_side,
-                amount=None,  # closePosition=True, amount diabaikan
+                amount=filled_amount,
                 params={
                     'stopPrice': exchange.price_to_precision(trade.pair, trade.tp_price),
                     'closePosition': True,
+                    'reduceOnly': True,
                 }
             )
             tp_order_id = str(tp_order['id'])

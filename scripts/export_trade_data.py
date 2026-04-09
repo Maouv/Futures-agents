@@ -4,7 +4,7 @@ export_trade_data.py — Export closed trades ke CSV untuk RL training.
 Usage:
     python scripts/export_trade_data.py
     python scripts/export_trade_data.py --pairs BTCUSDT,ETHUSDT
-    python scripts/export_trade_data.py --mode live
+    python scripts/export_trade_data.py --mode testnet
     python scripts/export_trade_data.py --from 2026-01-01 --to 2026-04-01
 
 Output: data/rl_training/trades_<timestamp>.csv
@@ -34,7 +34,7 @@ def export_trades(
 
     Args:
         pairs: Filter by pairs (None = semua)
-        mode: Filter by execution_mode ('paper' atau 'live')
+        mode: Filter by execution_mode ('paper', 'testnet', atau 'mainnet')
         from_date: Start date (YYYY-MM-DD)
         to_date: End date (YYYY-MM-DD)
 
@@ -107,7 +107,7 @@ def export_trades(
 def main():
     parser = argparse.ArgumentParser(description="Export trade data for RL training")
     parser.add_argument("--pairs", type=str, default=None, help="Comma-separated pairs (e.g., BTCUSDT,ETHUSDT). Default: dari pairs.json")
-    parser.add_argument("--mode", type=str, default=None, choices=['paper', 'live'], help="Filter by execution mode")
+    parser.add_argument("--mode", type=str, default=None, choices=['paper', 'testnet', 'mainnet'], help="Filter by execution mode (must match DB values)")
     parser.add_argument("--from", dest='from_date', type=str, default=None, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--to", dest='to_date', type=str, default=None, help="End date (YYYY-MM-DD)")
     args = parser.parse_args()
