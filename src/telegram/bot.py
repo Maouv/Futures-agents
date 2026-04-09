@@ -24,12 +24,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Deteksi command vs chat
     is_command = message.startswith('/') or any(
         kw in message.lower()
-        for kw in ['status', 'trades', 'history', 'performance', 'pause', 'resume', 'close all']
+        for kw in ['status', 'trades', 'history', 'performance', 'pause', 'resume']
     )
 
     if is_command:
         result = run_commander(message)
-        response = await _execute_command(result, int(chat_id))
+        response = await _execute_command(result)
     else:
         # Ambil context trade untuk Concierge
         trade_context = _get_trade_context()
@@ -38,16 +38,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 
-async def _execute_command(result, chat_id: int = 0) -> str:
+async def _execute_command(result) -> str:
     """Eksekusi fungsi berdasarkan CommanderResult."""
     from src.telegram.commands import COMMAND_HANDLERS
     handler = COMMAND_HANDLERS.get(result.function_name)
     if handler:
-        # Pass chat_id untuk commands yang butuh per-chat state
-        import inspect
-        sig = inspect.signature(handler)
-        if 'chat_id' in sig.parameters:
-            return handler(chat_id=chat_id)
         return handler()
     return f"❓ Perintah tidak dikenali: {result.original_message}"
 
@@ -107,8 +102,6 @@ def create_bot_app() -> Application:
     app.add_handler(CommandHandler("trades", _cmd_trades_handler))
     app.add_handler(CommandHandler("perf", _cmd_perf_handler))
     app.add_handler(CommandHandler("history", _cmd_history_handler))
-    app.add_handler(CommandHandler("close", _cmd_close_handler))
-    app.add_handler(CommandHandler("closeall", _cmd_closeall_handler))
     app.add_handler(CommandHandler("kill", _cmd_kill_handler))
     app.add_handler(CommandHandler("resume", _cmd_resume_handler))
     app.add_handler(CommandHandler("mode", _cmd_mode_handler))
@@ -148,20 +141,6 @@ async def _cmd_kill_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _cmd_resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from src.telegram.commands import cmd_resume
     await update.message.reply_text(cmd_resume())
-
-async def _cmd_close_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from src.telegram.commands import cmd_close_trade
-    # /close 5 → context.args = ['5']
-    trade_id = context.args[0] if context.args else None
-    if trade_id is None:
-        await update.message.reply_text("Gunakan: /close <trade_id>\nLihat /trades untuk daftar ID.")
-        return
-    await update.message.reply_text(cmd_close_trade(trade_id))
-
-async def _cmd_closeall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from src.telegram.commands import cmd_close_all_trades
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(cmd_close_all_trades(chat_id))
 
 async def _cmd_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from src.telegram.commands import cmd_switch_mode

@@ -1,6 +1,10 @@
 """
 sltp_manager.py — Cek SL/TP untuk paper trades yang masih OPEN.
 HANYA untuk paper mode. Di live mode, SL/TP sudah diserahkan ke Binance server.
+
+Exit detection menggunakan candle HIGH/LOW (bukan close) untuk menghindari
+look-ahead bias. Di Binance real, stop_market trigger berdasarkan high/low,
+bukan close — jadi paper mode harus mensimulasikan hal yang sama.
 """
 from datetime import datetime, timezone
 from typing import Dict, List
@@ -10,13 +14,13 @@ from src.data.storage import PaperTrade, get_session
 from src.utils.logger import logger
 
 
-def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
+def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
     """
-    Cek semua paper trade OPEN terhadap harga close 15m terbaru.
+    Cek semua paper trade OPEN terhadap harga high/low/close 15m terbaru.
 
     Args:
-        current_prices: Dictionary pair -> harga terbaru
-                        Contoh: {'BTCUSDT': 67500.0, 'ETHUSDT': 3500.0}
+        current_prices: Dictionary pair -> {high, low, close}
+                        Contoh: {'BTCUSDT': {'high': 67800, 'low': 67200, 'close': 67500}}
 
     Returns:
         List of closed trades dengan reason 'TP' atau 'SL'.
@@ -43,8 +47,8 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
         logger.info(f"Memeriksa {len(open_trades)} paper trade OPEN...")
 
         for trade in open_trades:
-            price = current_prices.get(trade.pair)
-            if price is None:
+            candle = current_prices.get(trade.pair)
+            if candle is None:
                 logger.error(
                     f"CRITICAL: Harga untuk {trade.pair} tidak ditemukan! "
                     f"Trade ID {trade.id} tidak dapat di-monitor. "
@@ -52,18 +56,31 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
                 )
                 continue
 
+            high = candle['high']
+            low = candle['low']
+
             hit_tp = False
             hit_sl = False
 
-            # Cek apakah SL atau TP tersentuh
+            # Cek SL/TP menggunakan high/low candle (bukan close)
+            # Ini mensimulasikan cara Binance trigger stop_market:
+            # - TP LONG ter-trigger saat harga NAIK menyentuh TP → cek HIGH
+            # - SL LONG ter-trigger saat harga TURUN menyentuh SL → cek LOW
+            # - SHORT: kebalikan
             if trade.side == 'LONG':
-                hit_tp = price >= trade.tp_price
-                hit_sl = price <= trade.sl_price
+                hit_tp = high >= trade.tp_price
+                hit_sl = low <= trade.sl_price
             else:  # SHORT
-                hit_tp = price <= trade.tp_price
-                hit_sl = price >= trade.sl_price
+                hit_tp = low <= trade.tp_price
+                hit_sl = high >= trade.sl_price
 
             if hit_tp or hit_sl:
+                # Race condition guard: re-read dari DB sebelum modify
+                # Mencegah double-close jika WS handler sudah menutup trade yang sama
+                db.refresh(trade)
+                if trade.status != 'OPEN':
+                    logger.debug(f"Trade {trade.id} already closed by another thread. Skipping.")
+                    continue
                 close_reason = 'TP' if hit_tp else 'SL'
                 close_price = trade.tp_price if hit_tp else trade.sl_price
 

@@ -246,6 +246,14 @@ class UserDataStream:
                 logger.debug(f"Entry order fill detected for trade {trade.id}")
                 return
 
+            # ── Race condition guard ───────────────────────────────────────────
+            # Re-read dari DB sebelum modify — mencegah double-close jika
+            # SLTPManager (paper mode) sudah menutup trade yang sama
+            db.refresh(trade)
+            if trade.status != 'OPEN':
+                logger.debug(f"Trade {trade.id} already closed. Skipping WS update.")
+                return
+
             # ── Calculate PnL ──────────────────────────────────────────────
             close_price = avg_price if avg_price > 0 else (
                 trade.sl_price if close_reason == 'SL' else trade.tp_price

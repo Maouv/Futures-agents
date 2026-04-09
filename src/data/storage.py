@@ -9,7 +9,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, String, Text,
-    create_engine, Index
+    create_engine, Index, text
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker, Mapped, mapped_column
 
@@ -133,8 +133,10 @@ def migrate_db() -> None:
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
             try:
+                # NOTE: Raw SQL diperlukan karena SQLAlchemy ORM tidak support ALTER TABLE.
+                # Nilai table/column/col_type di-hardcode di atas (bukan user input).
                 conn.execute(
-                    __import__("sqlalchemy").text(
+                    text(
                         f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
                     )
                 )

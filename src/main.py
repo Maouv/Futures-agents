@@ -99,9 +99,12 @@ class TradingBot:
                     logger.warning(f"{symbol}: Data fetch failed or gap detected. Skipping.")
                     continue
 
-                # Simpan harga untuk SLTP check
-                current_price = float(df_15m['close'].iloc[-1])
-                current_prices[symbol] = current_price
+                # Simpan harga untuk SLTP check (high/low/close)
+                current_prices[symbol] = {
+                    'high': float(df_15m['high'].iloc[-1]),
+                    'low': float(df_15m['low'].iloc[-1]),
+                    'close': float(df_15m['close'].iloc[-1]),
+                }
 
                 # ── 2. Session Filter ──────────────────────────────────────
                 if df_15m.attrs.get('skip_trade', False):

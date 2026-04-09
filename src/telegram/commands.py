@@ -3,20 +3,15 @@ commands.py — Handler untuk setiap command yang dikenali Commander.
 
 PENTING: Semua akses PaperTrade attribute HARUS di dalam `with get_session() as db:`
 karena SQLAlchemy object tidak bisa diakses setelah session ditutup (DetachedInstanceError).
+
+DESAIN: Tidak ada manual close (/close, /closeall). Trade hanya ditutup oleh
+SL/TP (Binance server-side di live mode, SLTPManager di paper mode).
+Alasan: "Kalo dah masuk trade, bodo amat mau kena SL atau TP" — biar SL/TP natural.
 """
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.kill_switch import create_kill_switch, remove_kill_switch, check_kill_switch
 from src.utils.logger import logger
-
-
-# ── Two-step confirmation state ─────────────────────────────────────────────
-import threading
-import time
-
-_pending_confirmations: dict[int, float] = {}  # {chat_id: timestamp}
-_CONFIRM_TIMEOUT_SEC = 30  # Konfirmasi hangus setelah 30 detik
-_pending_lock = threading.Lock()
 
 
 def cmd_menu() -> str:
@@ -37,8 +32,6 @@ def cmd_menu() -> str:
         f"/trades  — Open trades (mode aktif)\n"
         f"/history [paper|testnet|mainnet]\n"
         f"/perf [paper|testnet|mainnet]\n"
-        f"/close <id> — Close 1 trade by ID\n"
-        f"/closeall   — Close SEMUA trade\n"
         f"/mode paper|testnet|mainnet — Switch\n"
         f"/kill   — Stop buka trade baru\n"
         f"/resume — Boleh buka trade lagi"
@@ -149,149 +142,6 @@ def cmd_get_trade_history(mode: str = "") -> str:
     return "\n".join(lines)
 
 
-def cmd_close_trade(trade_id: str) -> str:
-    try:
-        tid = int(trade_id)
-    except ValueError:
-        return f"Trade ID tidak valid: {trade_id}"
-
-    with get_session() as db:
-        trade = db.query(PaperTrade).get(tid)
-        if trade is None:
-            return f"Trade {tid} tidak ditemukan."
-        if trade.status not in ('OPEN', 'PENDING_ENTRY'):
-            return f"Trade {tid} status={trade.status}, tidak bisa di-close."
-
-        # ── Paper mode ────────────────────────────────────────────────
-        if settings.EXECUTION_MODE != "live":
-            trade.status = 'CLOSED'
-            trade.close_reason = 'MANUAL'
-            trade.close_timestamp = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
-            return f"Trade {tid} closed (PAPER mode)."
-
-    # ── Live mode ─────────────────────────────────────────────────────
-    return _close_live_trade(tid)
-
-
-def _close_live_trade(trade_id: int) -> str:
-    """Close live trade: cancel SL/TP + close position at market."""
-    from src.utils.exchange import get_exchange
-    exchange = get_exchange()
-
-    with get_session() as db:
-        trade = db.query(PaperTrade).get(trade_id)
-        if trade is None:
-            return f"Trade {trade_id} tidak ditemukan."
-
-        symbol = trade.pair
-        close_side = 'sell' if trade.side == 'LONG' else 'buy'
-        current_status = trade.status
-
-        try:
-            # Cancel SL order jika ada
-            if trade.sl_order_id:
-                try:
-                    exchange.cancel_order(trade.sl_order_id, symbol)
-                except Exception:
-                    pass
-
-            # Cancel TP order jika ada
-            if trade.tp_order_id:
-                try:
-                    exchange.cancel_order(trade.tp_order_id, symbol)
-                except Exception:
-                    pass
-
-            # Cancel pending entry order jika ada
-            if current_status == 'PENDING_ENTRY' and trade.exchange_order_id:
-                try:
-                    exchange.cancel_order(trade.exchange_order_id, symbol)
-                except Exception:
-                    pass
-
-            # Close position at market (jika posisi masih terbuka)
-            if current_status == 'OPEN':
-                close_order = exchange.create_order(
-                    symbol=symbol,
-                    type='market',
-                    side=close_side,
-                    amount=None,
-                    params={'reduceOnly': True},
-                )
-                close_price = float(close_order.get('average', 0))
-
-                if trade.side == 'LONG':
-                    pnl = (close_price - trade.entry_price) * trade.size
-                else:
-                    pnl = (trade.entry_price - close_price) * trade.size
-
-                trade.close_price = close_price
-                trade.pnl = pnl
-            else:
-                pnl = 0
-
-            trade.status = 'CLOSED'
-            trade.close_reason = 'MANUAL'
-            trade.close_timestamp = __import__('datetime').datetime.now(__import__('datetime').timezone.utc)
-
-            return f"Trade {trade_id} closed (LIVE). PnL: ${pnl:.2f}"
-
-        except Exception as e:
-            logger.error(f"Failed to close live trade {trade_id}: {e}")
-            return f"ERROR closing trade {trade_id}: {e}"
-
-
-def cmd_close_all_trades(chat_id: int = 0) -> str:
-    """Two-step close all trades dengan per-chat confirmation + timeout."""
-    now = time.time()
-
-    with _pending_lock:
-        # Bersihkan konfirmasi yang sudah expired
-        expired_keys = [k for k, ts in _pending_confirmations.items() if now - ts > _CONFIRM_TIMEOUT_SEC]
-        for k in expired_keys:
-            del _pending_confirmations[k]
-
-        is_pending = chat_id in _pending_confirmations
-
-    if not is_pending:
-        with get_session() as db:
-            count = db.query(PaperTrade).filter(
-                PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY'])
-            ).count()
-
-        if count == 0:
-            return "Tidak ada open/pending trades untuk di-close."
-
-        with _pending_lock:
-            _pending_confirmations[chat_id] = now
-        return (
-            f"Ada {count} open/pending trades.\n"
-            f"Kirim 'CONFIRM CLOSE ALL' dalam {_CONFIRM_TIMEOUT_SEC} detik untuk menutup SEMUA trade.\n"
-            f"Tindakan ini TIDAK bisa dibatalkan."
-        )
-
-    # Step 2: Execute — hapus konfirmasi dulu
-    with _pending_lock:
-        _pending_confirmations.pop(chat_id, None)
-
-    closed_count = 0
-    errors = 0
-
-    with get_session() as db:
-        trade_ids = [t.id for t in db.query(PaperTrade).filter(
-            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY'])
-        ).all()]
-
-    for tid in trade_ids:
-        result = cmd_close_trade(str(tid))
-        if "ERROR" in result:
-            errors += 1
-        else:
-            closed_count += 1
-
-    return f"Closed {closed_count} trades. Errors: {errors}."
-
-
 def cmd_kill() -> str:
     """Aktifkan kill switch — bot tidak buka trade baru."""
     create_kill_switch()
@@ -346,8 +196,6 @@ COMMAND_HANDLERS = {
     'get_open_trades': cmd_get_open_trades,
     'get_performance': cmd_get_performance,
     'get_trade_history': cmd_get_trade_history,
-    'close_trade': cmd_close_trade,
-    'close_all_trades': cmd_close_all_trades,
     'activate_kill_switch': cmd_kill,
     'deactivate_kill_switch': cmd_resume,
     'show_menu': cmd_menu,
