@@ -63,6 +63,7 @@ def run_analyst(
     reversal: ReversalResult,
     confirmation: ConfirmationResult,
     current_price: float,
+    symbol: str = "BTCUSDT",
 ) -> AnalystDecision:
     """
     Jalankan LLM Analyst. Fallback ke rule-based jika API down.
@@ -73,7 +74,10 @@ def run_analyst(
         timeout=settings.LLM_FAST_TIMEOUT_SEC,
     )
 
-    prompt = f"""You are a professional crypto futures trader analyzing BTC/USDT.
+    # Format pair untuk display (BTCUSDT -> BTC/USDT)
+    display_pair = f"{symbol[:-4]}/{symbol[-4:]}" if symbol.endswith("USDT") else symbol
+
+    prompt = f"""You are a professional crypto futures trader analyzing {display_pair}.
 
 MARKET DATA:
 - Current Price: ${current_price:,.2f}

@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     CONCIERGE_TIMEOUT_SEC: int = Field(default=600, description="Timeout GLM-5 (lambat)")
     CONCIERGE_MAX_TOKENS: int = Field(default=5000, description="Max tokens GLM-5 reasoning")
 
+    # ── Live Trading Safety ─────────────────────────────────────────────────
+    CONFIRM_MAINNET: bool = Field(default=False, description="Wajib True jika USE_TESTNET=False. Speed bump untuk mencegah accidental mainnet.")
+    MAX_OPEN_POSITIONS: int = Field(default=1, ge=1, le=10, description="Max posisi terbuka PER PAIR (bukan global)")
+    ORDER_EXPIRY_CANDLES: int = Field(default=48, ge=1, description="Limit order kadaluarsa setelah N candle H1. Default 48 = 2 hari")
+
 
 # Singleton — import ini di mana saja
 settings = Settings()

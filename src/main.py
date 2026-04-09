@@ -4,14 +4,16 @@ Loop 15 menit via APScheduler (background thread).
 Telegram bot di main thread.
 """
 import asyncio
+import time
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.config.settings import settings
-from src.data.storage import init_db
-from src.data.ohlcv_fetcher import fetch_ohlcv
+from src.data.storage import init_db, migrate_db, PaperTrade, get_session
+from src.data.ohlcv_fetcher import fetch_ohlcv, log_weight_summary
+from src.config.pairs import load_pairs
 from src.agents.math.trend_agent import TrendAgent
 from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.confirmation_agent import ConfirmationAgent
@@ -21,19 +23,21 @@ from src.agents.math.sltp_manager import check_paper_trades
 from src.agents.llm.analyst_agent import run_analyst
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
-
-SYMBOL = "BTCUSDT"
+from src.utils.kill_switch import check_kill_switch
 
 
 class TradingBot:
     """
     Orchestrator utama dengan proper encapsulation.
-    Menghilangkan global variables untuk better testability.
+    Multi-pair sequential loop — pairs di-load dari pairs.json.
     """
 
     def __init__(self):
         self.event_loop = None
         self.scheduler = None
+        self.pairs = load_pairs()
+        self._ws_stream = None  # User Data Stream (live mode only)
+        self._execution_agent = ExecutionAgent()  # Reusable instance
 
     def send_notification_sync(self, message: str):
         """
@@ -57,74 +61,119 @@ class TradingBot:
 
     def run_trading_cycle(self):
         """
-        Siklus utama 15 menit:
-        Fetch Data → Math Agents → LLM Analyst → Risk → Execution → SLTP Check
+        Siklus utama 15 menit (multi-pair sequential):
+        Untuk setiap pair: Fetch Data → Math Agents → LLM Analyst → Risk → Execution
+        Lalu: SLTP Check untuk semua pair sekaligus.
         """
         logger.info(f"=== CYCLE START {datetime.now(timezone.utc).strftime('%H:%M UTC')} ===")
+        logger.info(f"Processing {len(self.pairs)} pairs: {', '.join(self.pairs)}")
 
-        try:
-            # ── 1. Fetch Data ──────────────────────────────────────────────
-            df_h4  = fetch_ohlcv(SYMBOL, '4h')
-            df_h1  = fetch_ohlcv(SYMBOL, '1h')
-            df_15m = fetch_ohlcv(SYMBOL, '15m')
+        # ── Kill Switch Check ──────────────────────────────────────────────
+        if check_kill_switch():
+            logger.critical("KILL SWITCH AKTIF — cycle dilewati")
+            return
 
-            if df_h4 is None or df_h1 is None or df_15m is None:
-                logger.warning("Data fetch failed or gap detected. Skipping cycle.")
-                return
-
-            # ── 2. Session Filter ──────────────────────────────────────────
-            if df_15m.attrs.get('skip_trade', False):
-                logger.info("Outside trading session. Checking SLTP only.")
-                self._run_sltp_check(df_15m)
-                return
-
-            current_price = float(df_15m['close'].iloc[-1])
-
-            # ── 3. Math Agents ─────────────────────────────────────────────
-            trend        = TrendAgent().run(df_h4)
-            reversal     = ReversalAgent().run(df_h1, swing_size=3)
-            confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
-
-            logger.info(f"Trend: {trend.bias_label} | Signal: {reversal.signal} | Confirmed: {confirmation.confirmed}")
-
-            # ── 4. LLM Analyst ─────────────────────────────────────────────
-            decision = run_analyst(trend, reversal, confirmation, current_price)
-            logger.info(f"Analyst: {decision.action} (confidence: {decision.confidence}) [{decision.source}]")
-
-            # ── 5. Risk & Execution ────────────────────────────────────────
-            if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
-                if reversal.ob is not None:
-                    risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
-                    result = ExecutionAgent().run(
-                        symbol=SYMBOL,
-                        risk_result=risk,
-                        reversal_result=reversal,
-                        trend_result=trend,
-                        confirmation_confirmed=confirmation.confirmed,
+        # ── Check Pending Orders (live mode) ───────────────────────────────
+        if settings.EXECUTION_MODE == "live":
+            pending_results = self._execution_agent.check_pending_orders()
+            for r in pending_results:
+                if r.get('action') == 'filled':
+                    self.send_notification_sync(
+                        f"LIVE order FILLED → SL/TP placed\n"
+                        f"Trade {r['trade_id']} | {r['pair']}"
                     )
 
-                    if result.action == 'OPEN':
-                        self.send_notification_sync(
-                            f"🔔 Paper {decision.action}\n"
-                            f"Entry: ${risk.entry_price:,.2f}\n"
-                            f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
-                            f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
-                        )
-                else:
-                    logger.info("No OB available for entry. Skipping.")
-            else:
-                logger.info(f"SKIP — {decision.reasoning}")
+        # Kumpulkan harga terbaru dari setiap pair untuk SLTP check
+        current_prices = {}
 
-            # ── 6. SLTP Check ──────────────────────────────────────────────
-            self._run_sltp_check(df_15m)
+        try:
+            for symbol in self.pairs:
+                logger.info(f"--- {symbol} ---")
+
+                # ── 1. Fetch Data ──────────────────────────────────────────
+                df_h4  = fetch_ohlcv(symbol, '4h')
+                df_h1  = fetch_ohlcv(symbol, '1h')
+                df_15m = fetch_ohlcv(symbol, '15m')
+
+                if df_h4 is None or df_h1 is None or df_15m is None:
+                    logger.warning(f"{symbol}: Data fetch failed or gap detected. Skipping.")
+                    continue
+
+                # Simpan harga untuk SLTP check
+                current_price = float(df_15m['close'].iloc[-1])
+                current_prices[symbol] = current_price
+
+                # ── 2. Session Filter ──────────────────────────────────────
+                if df_15m.attrs.get('skip_trade', False):
+                    logger.info(f"{symbol}: Outside trading session. Skipping signal generation.")
+                    continue
+
+                # ── 3. Math Agents ─────────────────────────────────────────
+                trend        = TrendAgent().run(df_h4)
+                reversal     = ReversalAgent().run(df_h1, swing_size=3)
+                confirmation = ConfirmationAgent().run(df_15m, reversal.signal)
+
+                logger.info(f"{symbol}: Trend={trend.bias_label} | Signal={reversal.signal} | Confirmed={confirmation.confirmed}")
+
+                # ── 4. LLM Analyst ─────────────────────────────────────────
+                decision = run_analyst(trend, reversal, confirmation, current_price, symbol)
+                logger.info(f"{symbol}: Analyst={decision.action} (confidence: {decision.confidence}) [{decision.source}]")
+
+                # Throttle: jeda 1 detik antar LLM call untuk aman dari RPM limit
+                if len(self.pairs) > 5:
+                    time.sleep(1.0)
+
+                # ── 5. Risk & Execution ────────────────────────────────────
+                if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
+                    # Max 1 open trade per pair (OPEN atau PENDING_ENTRY)
+                    with get_session() as db:
+                        existing = db.query(PaperTrade).filter(
+                            PaperTrade.pair == symbol,
+                            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+                        ).count()
+                    if existing > 0:
+                        logger.info(f"{symbol}: Already has {existing} open/pending trade. Skipping.")
+                        continue
+
+                    if reversal.ob is not None:
+                        risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
+                        result = self._execution_agent.run(
+                            symbol=symbol,
+                            risk_result=risk,
+                            reversal_result=reversal,
+                            trend_result=trend,
+                            confirmation_confirmed=confirmation.confirmed,
+                        )
+
+                        if result.action == 'OPEN':
+                            self.send_notification_sync(
+                                f"Paper {decision.action} | {symbol}\n"
+                                f"Entry: ${risk.entry_price:,.2f}\n"
+                                f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
+                                f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
+                            )
+                        elif result.action == 'PENDING':
+                            self.send_notification_sync(
+                                f"LIVE {decision.action} PENDING | {symbol}\n"
+                                f"Limit @ ${risk.entry_price:,.2f}\n"
+                                f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
+                                f"Waiting for fill..."
+                            )
+                    else:
+                        logger.info(f"{symbol}: No OB available for entry. Skipping.")
+                else:
+                    logger.info(f"{symbol}: SKIP — {decision.reasoning}")
+
+            # ── 6. SLTP Check (semua pair sekaligus) ────────────────────────
+            if current_prices:
+                self._run_sltp_check(current_prices)
 
         except Exception as e:
             logger.error(f"Cycle error: {e}", exc_info=True)
 
-    def _run_sltp_check(self, df_15m):
-        """Cek SL/TP paper trades dengan harga close 15m terbaru."""
-        current_price = float(df_15m['close'].iloc[-1])
-        closed = check_paper_trades({SYMBOL: current_price})
+    def _run_sltp_check(self, current_prices: dict):
+        """Cek SL/TP paper trades dengan harga terbaru dari semua pair."""
+        closed = check_paper_trades(current_prices)
 
         for trade in closed:
             emoji = "✅" if trade['pnl'] > 0 else "❌"
@@ -139,8 +188,38 @@ class TradingBot:
         setup_logger()
         logger.info(f"Starting Futures Agent | Mode: {settings.EXECUTION_MODE.upper()}")
 
-        # Init DB
+        # ── Startup Safety Checks ──────────────────────────────────────────
+        if settings.EXECUTION_MODE == "live":
+            if not settings.USE_TESTNET and not settings.CONFIRM_MAINNET:
+                logger.critical(
+                    "FATAL: EXECUTION_MODE=live, USE_TESTNET=False, tapi CONFIRM_MAINNET tidak True. "
+                    "Tambahkan CONFIRM_MAINNET=True di .env untuk konfirmasi mainnet."
+                )
+                return
+
+            testnet_label = "TESTNET" if settings.USE_TESTNET else "MAINNET"
+            logger.warning(f"LIVE MODE AKTIF — {testnet_label} — uang sungguhan terlibat!")
+
+        logger.info(f"Pairs: {', '.join(self.pairs)}")
+
+        # Init DB + Migration
         init_db()
+        migrate_db()
+
+        # Log weight estimate (sekali saat startup)
+        log_weight_summary(len(self.pairs))
+
+        # ── Position Reconciliation (live mode) ────────────────────────────
+        if settings.EXECUTION_MODE == "live":
+            self._reconcile_positions()
+
+        # ── Start User Data Stream (live mode) ─────────────────────────────
+        if settings.EXECUTION_MODE == "live":
+            from src.data.ws_user_stream import UserDataStream
+            self._ws_stream = UserDataStream(
+                notification_callback=self._ws_notification_handler
+            )
+            self._ws_stream.start()
 
         # Buat event loop untuk main thread
         self.event_loop = asyncio.new_event_loop()
@@ -165,8 +244,65 @@ class TradingBot:
         try:
             app.run_polling(drop_pending_updates=True)
         except KeyboardInterrupt:
+            if self._ws_stream:
+                self._ws_stream.stop()
             self.scheduler.shutdown()
             logger.info("Bot stopped.")
+
+    def _ws_notification_handler(self, data: dict) -> None:
+        """Handle notification dari WS thread — bridge ke Telegram."""
+        if data.get('event') == 'trade_closed':
+            trade = data
+            emoji = "+" if trade.get('pnl', 0) > 0 else "-"
+            self.send_notification_sync(
+                f"{emoji} LIVE {trade['close_reason']} Hit\n"
+                f"{trade['pair']} {trade['side']}\n"
+                f"Close: ${trade.get('close_price', 0):,.2f} | PnL: ${trade.get('pnl', 0):.2f}"
+            )
+
+    def _reconcile_positions(self) -> None:
+        """
+        Reconcile DB state dengan Binance actual positions saat startup.
+        Mencegah orphan positions setelah crash/restart.
+        """
+        from src.utils.exchange import get_exchange
+
+        logger.info("Reconciling positions with Binance...")
+        exchange = get_exchange()
+
+        try:
+            # Fetch actual open positions from Binance
+            positions = exchange.fetch_positions()
+            active_pairs = set()
+            for pos in positions:
+                amt = float(pos.get('contracts', pos.get('positionAmt', 0)))
+                if abs(amt) > 0:
+                    symbol = pos.get('symbol', '').replace('/', '').replace(':', '')
+                    active_pairs.add(symbol)
+
+            # Check DB trades vs Binance reality
+            with get_session() as db:
+                open_trades = db.query(PaperTrade).filter(
+                    PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+                    PaperTrade.execution_mode == 'live',
+                ).all()
+
+                for trade in open_trades:
+                    if trade.pair not in active_pairs:
+                        # Trade open di DB tapi tidak di Binance — mark reconciled
+                        trade.status = 'CLOSED'
+                        trade.close_reason = 'RECONCILED'
+                        trade.close_timestamp = datetime.now(timezone.utc)
+                        logger.warning(
+                            f"Reconciled: Trade {trade.id} ({trade.pair}) — "
+                            f"no position on Binance"
+                        )
+
+            logger.info(f"Position reconciliation complete. Binance positions: {active_pairs or 'none'}")
+
+        except Exception as e:
+            logger.error(f"Position reconciliation failed: {e}")
+            logger.warning("Proceeding without reconciliation — monitor manually!")
 
 
 def main():

@@ -2,9 +2,10 @@
 sltp_manager.py — Cek SL/TP untuk paper trades yang masih OPEN.
 HANYA untuk paper mode. Di live mode, SL/TP sudah diserahkan ke Binance server.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 
+from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.logger import logger
 
@@ -21,6 +22,13 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
         List of closed trades dengan reason 'TP' atau 'SL'.
         Contoh: [{'trade_id': 1, 'pair': 'BTCUSDT', 'side': 'LONG', 'pnl': 50.0, 'reason': 'TP'}]
     """
+    # ── Live Mode Guard ────────────────────────────────────────────────────
+    # Di live mode, SL/TP di-handle oleh Binance server-side + WebSocket.
+    # SLTPManager hanya dipakai di paper mode.
+    if settings.EXECUTION_MODE == "live":
+        logger.debug("Live mode — SL/TP managed by Binance, skipping paper SLTP check")
+        return []
+
     closed = []
 
     with get_session() as db:
@@ -69,7 +77,7 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
                 trade.status = 'CLOSED'
                 trade.pnl = pnl
                 trade.close_reason = close_reason
-                trade.close_timestamp = datetime.utcnow()
+                trade.close_timestamp = datetime.now(timezone.utc)
 
                 closed.append({
                     'trade_id': trade.id,
@@ -82,7 +90,7 @@ def check_paper_trades(current_prices: Dict[str, float]) -> List[Dict]:
                 })
 
                 logger.info(
-                    f"🔔 PAPER TRADE CLOSED | ID: {trade.id} | "
+                    f"PAPER TRADE CLOSED | ID: {trade.id} | "
                     f"{trade.pair} {trade.side} | "
                     f"Reason: {close_reason} | PnL: ${pnl:.2f}"
                 )

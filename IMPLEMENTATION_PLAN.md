@@ -1,310 +1,204 @@
-
 # IMPLEMENTATION_PLAN.md
 
-> **Perhatian untuk AI Assistant (Claude Code):**
-> File ini adalah **satu-satunya sumber kebenaran (source of truth)** untuk urutan pengembangan. Jangan pernah melompat ke Phase N jika Phase N-1 belum selesai. Jika ada konflik antara permintaan user dan aturan di file ini, **TANYAKAN KE USER DAHULU** sebelum menulis kode.
+> **Untuk AI Assistant (Claude Code):**
+> File ini adalah **satu-satunya sumber kebenaran** untuk urutan pengembangan. Jangan pernah melompat ke Phase N jika Phase N-1 belum selesai. Jika ada konflik antara permintaan user dan aturan di file ini, **TANYAKAN KE USER DAHULU** sebelum menulis kode.
 
 ---
 
 ## 🛑 LOCKED ARCHITECTURE DECISIONS (JANGAN PERNAH DIUBAH)
 
-Sebelum memulai, kamu harus menghafal batasan sistem ini:
-1. **Exchange Type:** **Futures (USD-M)**. Gunakan `ccxt.binanceusdm()`. BUKAN `ccxt.binance()`.
-2. **Data Historis/Market:** WAJIB pakai REST API. DILARANG pakai WebSocket untuk stream data tick/kline.
-3. **Pemantauan Posisi (Phase 8 Live):** Pakai User Data WebSocket (hanya dengarkan event `ORDER_TRADE_UPDATE`).
-4. **Perhitungan Indikator:** WAJIB murni Python (`pandas`/`numpy`). DILARANG meminta LLM untuk menghitung RSI/SMC.
-5. **Live Execution Method:** **DILARANG PAKAI OCO.** Gunakan Entry Order + 2x Stop Market/TP Market Order terpisah.
+1. **Exchange Type:** `ccxt.binanceusdm()` — USD-M Futures. BUKAN `ccxt.binance()`.
+2. **Data Market:** WAJIB REST API. DILARANG WebSocket untuk stream tick/kline.
+3. **Pemantauan Posisi (Phase 8 Live):** User Data WebSocket — hanya event `ORDER_TRADE_UPDATE`.
+4. **Indikator:** Murni Python (`pandas`/`numpy`). DILARANG LLM menghitung RSI/SMC.
+5. **Live Execution:** DILARANG OCO. Gunakan Entry Order + 2x Stop Market/TP Market terpisah.
 6. **Model LLM:**
-│ │- Analyst: `Cerebras` (Qwen-3-235B). Temp `0.0`. JSON mode.
-│ │- Commander: `Groq` (Llama-3.1-8b). Temp `0.0`. JSON mode.
-│ │- Concierge: `Modal` (GLM-5 FP8). Temp `0.8`. Chat mode (NO JSON PARSING).
+   - Analyst: Cerebras (Qwen-3-235B-A22B). Temp `0.0`. JSON mode.
+   - Commander: Groq (Llama-3.1-8b-instant). Temp `0.0`. JSON mode.
+   - Concierge: Modal (GLM-5 FP8). Temp `0.7`. Chat mode (NO JSON PARSING).
+7. **RL Training:** Google Colab (GPU T4). BUKAN VPS. VPS hanya jalankan ONNX inference.
+8. **Modal:** Koneksi via `openai` SDK + `base_url`. Modal SDK TIDAK diinstall.
 
-## 🔧 ARCHITECTURE ADDENDUM (Ditambahkan setelah versi awal — berlaku sebagai override)
+## 🔧 ARCHITECTURE ADDENDUM (Override jika ada konflik dengan versi lama)
 
-1. **`USE_TESTNET: bool`** wajib ada di `src/config/settings.py`. Gunakan field ini untuk switch ccxt instance antara production dan testnet. Jangan hardcode URL di agent manapun.
-2. **Scope LuxAlgo Phase 2:** Hanya port 3 fungsi — Order Blocks, FVG, BOS/CHOCH. Skip semua fitur visual/display.
-3. **GLM-5 timeout & max tokens:** Gunakan `CONCIERGE_TIMEOUT_SEC=600` dan `CONCIERGE_MAX_TOKENS=5000` (nilai dari `.env.example`, bukan nilai lama di CLAUDE.md).
-4. **Modal SDK tidak diinstall.** Koneksi GLM-5 cukup via `openai` SDK dengan `base_url=settings.MODAL_BASE_URL`.
-5. **RL Training (Phase 7) dilakukan di Google Colab, bukan di VPS.** Lihat detail alur di Phase 7.
-
----
-
-## 📦 PHASE 0: Scaffolding, Config & Database (Estimasi: 1-2 Hari)
-*Tujuan: Membangun pondasi, memastikan Environment Variables aman, dan skema DB siap.*
-
-- [ ] **0.1** Buat struktur folder persis seperti ini:
-│ ```text
-│ project-root/
-│ ├── .env
-│ ├── .gitignore (WAJIB masukkan *.env, data/, __pycache__/, venv/)
-│ ├── src/
-│ ││ │├── __init__.py
-│ ││ │├── main.py
-│ ││ │├── config/
-│ ││ │││ │├── __init__.py
-│ ││ │││ │└── settings.py        # Pydantic Settings
-│ ││ │├── data/
-│ ││ │││ │├── __init__.py
-│ ││ │││ │├── storage.py         # SQLAlchemy Models & Session
-│ ││ │││ │├── ohlcv_fetcher.py
-│ ││ │││ │└── onchain_fetcher.py
-│ ││ │├── agents/
-│ ││ │││ │├── __init__.py
-│ ││ │││ │├── math/              # Agent 1-7
-│ ││ │││ │└── llm/               # Agent 8-10
-│ ││ │├── indicators/
-│ ││ │││ │├── __init__.py
-│ ││ │││ │├── luxalgo_smc.py
-│ ││ │││ │└── mean_reversion.py
-│ ││ │├── telegram/
-│ ││ │││ │├── __init__.py
-│ ││ │││ │├── bot.py
-│ ││ │││ │└── commands.py
-│ ││ │└── utils/
-│ ││ │   │├── __init__.py
-│ ││ │   │├── rate_limiter.py
-│ ││ │   │└── logger.py
-│ ├── tests/
-│ └── data/                      # Lokal DB
-│ ```
-- [ ] **0.2** Implementasi `src/config/settings.py` mengikuti aturan `ENV_AND_SECRETS_RULE.md` (Gunakan `pydantic-settings`, `SecretStr`, `HttpUrl`). *Pastikan ada variable `FUTURES_MARGIN_TYPE`, `FUTURES_DEFAULT_LEVERAGE`, dan `USE_TESTNET`.*
-- [ ] **0.3** Implementasi `src/data/storage.py` (SQLAlchemy):
-│ - Tabel `ohlcv_h1`, `ohlcv_h4`, `ohlcv_15m`
-│ - Tabel `paper_trades` (id, pair, side, entry_price, sl, tp, size, leverage, status, pnl, timestamp)
-│ - Tabel `trade_logs`
-- [ ] **0.4** Implementasi `src/utils/logger.py` (Loguru setup).
-- [ ] **0.5** Pastikan `python -c "from src.config.settings import settings; print(settings.EXECUTION_MODE)"` berhasil tanpa error.
+1. `USE_TESTNET: bool` wajib ada di `src/config/settings.py`. Gunakan untuk switch ccxt instance.
+2. **LuxAlgo Scope:** Hanya 3 fungsi — Order Blocks, FVG, BOS/CHOCH. Skip semua visual/display.
+3. **GLM-5 settings:** `CONCIERGE_TIMEOUT_SEC=600`, `CONCIERGE_MAX_TOKENS=5000`.
+4. **RR Ratio:** Baca dari `settings.RISK_REWARD_RATIO`. DILARANG hardcode nilai RR di kode manapun.
+5. **Position Size:** Fixed risk `settings.RISK_PER_TRADE_USD` (bukan % dari balance).
+6. **Exit Check:** Gunakan high/low candle, BUKAN close price (menghindari look-ahead bias).
+7. **SKIPPED trades:** Dieksklusi dari semua kalkulasi metrics (win rate, profit factor, drawdown).
+8. **RL Exploration:** Thompson Sampling (Beta distribution per action). BUKAN epsilon-greedy.
+9. **Multi-pair:** Backtest dan RL training support multi-pair via `--pairs` flag.
 
 ---
 
-## 📦 PHASE 1: Data Engine, Rate Limiter & Safety Checks (Estimasi: 2-3 Hari)
-*Tujuan: Sistem bisa mengambil data dari Binance Futures dengan aman, plus memasang 2 fitur "Pengaman" wajib.*
+## STATUS IMPLEMENTASI
 
-- [ ] **1.1** Implementasi `src/utils/rate_limiter.py` (Sliding window, max 800 req/min).
-- [ ] **1.2** Implementasi `src/data/ohlcv_fetcher.py` (Fetch H4, H1, 15m via `ccxt.binanceusdm()`, simpan ke DB, wajib bungkus dengan Rate Limiter).
-- [ ] **1.3** **(KRITIS)** Implementasi **Gap Detector** di `ohlcv_fetcher.py`: Cek selisih timestamp candle terakhir di DB dengan candle baru. Jika gap > 16 menit, LOG ERROR dan return `None` (jangan proses data).
-- [ ] **1.4** **(KRITIS)** Implementasi **Session Filter** di `ohlcv_fetcher.py`: Hanya return data jika Waktu UTC berada di range London Open (07:00-10:00 UTC) atau New York Open (13:00-16:00 UTC). Jika di luar itu, return flag `SKIP_TRADE=True`.
-- [ ] **1.5** Buat `tests/test_fetcher.py` untuk memastikan Gap Detector dan Session Filter bekerja benar.
+### ✅ PHASE 0: Scaffolding, Config & Database — SELESAI
 
----
+- [x] Struktur folder sesuai spec
+- [x] `src/config/settings.py` — Pydantic Settings, SecretStr, USE_TESTNET, FUTURES_MARGIN_TYPE, FUTURES_DEFAULT_LEVERAGE, RISK_PER_TRADE_USD, RISK_REWARD_RATIO
+- [x] `src/data/storage.py` — SQLAlchemy models (ohlcv_h1, ohlcv_h4, ohlcv_15m, paper_trades, trade_logs)
+- [x] `src/utils/logger.py` — Loguru setup
+- [x] `src/utils/rate_limiter.py` — Sliding window, max 800 req/min
 
-## 📦 PHASE 2: Porting Indikator & Validasi (BLOCKING - Estimasi: 3-5 Hari)
-*Tujuan: Menerjemahkan logika PineScript ke Python. JANGAN LANJUT KE PHASE 2.5 sebelum validasi ini selesai.*
+### ✅ PHASE 1: Data Engine & Safety Checks — SELESAI
 
-- [ ] **2.1** Implementasi `src/indicators/helpers.py` (ATR, Swing High/Low logic).
-- [ ] **2.2** Implementasi `src/indicators/luxalgo_smc.py`. **Scope terbatas — hanya 3 fungsi:**
-│ - `detect_order_blocks(df)` → dari logika `storeOrderBlock` + `deleteOrderBlocks`
-│ - `detect_fvg(df)` → dari tipe `fairValueGap` + detection logic
-│ - `detect_bos_choch(df)` → dari `displayStructure` (bagian `ta.crossover/crossunder`)
-│ - **SKIP** semua fitur visual: drawing boxes, labels, equal highs/lows, premium/discount zones.
-│ - *Catatan: Gunakan 0-based indexing, hati-hati shift dari PineScript 1-based.*
-- [ ] **2.3** Implementasi `src/indicators/mean_reversion.py` (RSI, Bollinger Bands).
-- [ ] **2.4** **VALIDASI MANUAL:** Ambil data historis 100 baris dari TradingView (CSV). Bandingkan output Python dengan TradingView. Jika ada selisih di atas `0.001`, **HENTIKAN** dan perbaiki bug.
+- [x] `src/data/ohlcv_fetcher.py` — Fetch H4/H1/15m via `ccxt.binanceusdm()`
+- [x] Gap Detector — `detect_gap_in_batch()`, tolak jika gap > `GAP_MULTIPLIER × timeframe_seconds`
+- [x] Session Filter — `is_trading_session()`, London 07:00–10:00 + NY 13:00–16:00 UTC
+- [x] Rate Limiter terintegrasi
+- [x] `src/data/onchain_fetcher.py` — placeholder
 
----
+### ✅ PHASE 2: Indikator SMC & Mean Reversion — SELESAI
 
-## 📦 PHASE 2.5: Backtest Engine & Validasi Strategi SMC (BLOCKING - Estimasi: 2-3 Hari)
-*Tujuan: Memvalidasi apakah strategi SMC profitable secara historis sebelum lanjut ke Phase 3.*
-*JANGAN LANJUT KE PHASE 3 jika win rate backtest di bawah 45%.*
+- [x] `src/indicators/helpers.py` — ATR, Swing High/Low
+- [x] `src/indicators/_smc_core.py` — Core SMC logic (internal)
+- [x] `src/indicators/luxalgo_smc.py` — `detect_order_blocks()`, `detect_fvg()`, `detect_bos_choch()`, `detect_all()`
+- [x] `src/indicators/mean_reversion.py` — RSI, Bollinger Bands
+- [x] `scripts/validate_indicators.py` — script validasi manual vs TradingView
 
-### Mengapa Phase ini ada?
-Daripada menunggu 30 hari paper trade untuk tahu strategi layak atau tidak, kita validasi dulu dengan data historis nyata dari Binance. Lebih cepat, lebih hemat waktu.
+### ✅ PHASE 2.5: Backtest Engine — SELESAI
 
-### Download Data Historis
+- [x] `src/backtest/engine.py` — Full pipeline: load CSV → Math Agents → simulasi entry/exit
+  - Exit check pakai high/low candle (bukan close)
+  - Position size: fixed risk USD dengan leverage
+  - Fee 0.05% + slippage 0.1% per sisi
+  - RL filter opsional via `use_rl=True` + ONNX inference
+  - Multi-pair support
+  - CSV export dengan 22+ kolom RL features
+- [x] `src/backtest/metrics.py` — `TradeResult`, `BacktestMetrics`, `calculate_metrics()` — SKIPPED trades dieksklusi
+- [x] `scripts/run_backtest.py` — CLI dengan `--pairs`, `--h4-csv`, `--h1-csv`, `--m15-csv`, `--use-rl` flags
+- [x] Gate check terpenuhi (best config: WR ~55%, PF ~1.53, MDD ~8.84%, RR 2:1)
 
-- [ ] **2.5.1** Buat script `scripts/download_historical.py`:
-│ - Source: `https://data.binance.vision` (data resmi Binance, gratis, tanpa API key)
-│ - Download OHLCV Futures untuk pasangan utama (default: `BTCUSDT`)
-│ - Timeframe yang dibutuhkan: `15m`, `1h`, `4h`
-│ - Range: minimal 1 tahun ke belakang (lebih banyak = lebih akurat)
-│ - Format output: CSV → simpan ke `data/historical/`
-│ - Contoh URL: `https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/15m/BTCUSDT-15m-2024-01.zip`
-│ - Script wajib otomatis unzip dan gabungkan semua file bulanan jadi 1 CSV per timeframe.
+### ✅ PHASE 3: Math Agents — SELESAI
 
-- [ ] **2.5.2** Buat `scripts/load_historical_to_db.py`:
-│ - Baca CSV dari `data/historical/`
-│ - Insert ke tabel `ohlcv_15m`, `ohlcv_h1`, `ohlcv_h4` yang sudah ada
-│ - Gunakan `get_session()` dari `storage.py` — DILARANG raw SQL
-│ - Tampilkan progress: berapa candle berhasil diinsert
+- [x] `src/agents/math/base_agent.py` — Base class
+- [x] `src/agents/math/trend_agent.py` — H4 BOS/CHOCH, lookback 100 candle
+- [x] `src/agents/math/reversal_agent.py` — H1 SMC + Mean Reversion, confidence 0–100
+- [x] `src/agents/math/confirmation_agent.py` — 15m validation, fvg_confluence + bos_alignment
+- [x] `src/agents/math/risk_agent.py` — ATR-based SL/TP, fixed USD risk, RR dari settings (tidak hardcode)
+- [x] `src/agents/math/execution_agent.py` — Paper mode: INSERT paper_trades
+- [x] `src/agents/math/sltp_manager.py` — Cek high/low candle, update CLOSED, hitung PnL
 
-### Backtest Engine
+### ✅ PHASE 4: LLM Agents — SELESAI
 
-- [ ] **2.5.3** Buat `src/backtest/engine.py`:
-│ - Load data dari DB (bukan live fetch)
-│ - Jalankan pipeline indikator Phase 2 (SMC + Mean Reversion) terhadap data historis
-│ - Simulasi entry/exit berdasarkan sinyal — gunakan logika yang **sama persis** dengan yang akan dipakai di Phase 3
-│ - Hitung SL/TP berdasarkan ATR (sama dengan `risk_agent.py` nanti)
-│ - Output wajib berupa Pydantic Model `BacktestResult`:
-│   ```python
-│   class BacktestResult(BaseModel):
-│       total_trades: int
-│       win_rate: float          # 0.0 - 1.0
-│       avg_rr: float            # Average Risk/Reward ratio
-│       max_drawdown: float      # Dalam persentase
-│       profit_factor: float     # Gross profit / Gross loss
-│       sharpe_ratio: float
-│       total_pnl_pct: float     # Total PnL dalam persentase
-│   ```
+- [x] `src/agents/llm/analyst_agent.py` — Cerebras Qwen-3-235B, temp 0.0, JSON mode, rule-based fallback
+- [x] `src/agents/llm/commander_agent.py` — Groq Llama-3.1-8b, temp 0.0, JSON mode
+- [x] `src/agents/llm/concierge_agent.py` — Modal GLM-5, temp 0.7, chat mode, concurrency lock
 
-- [ ] **2.5.4** Buat `scripts/run_backtest.py`:
-│ - Entry point untuk menjalankan backtest dari CLI
-│ - Print hasil `BacktestResult` ke terminal dalam format yang readable
-│ - Simpan hasil ke `data/backtest_results/backtest_{timestamp}.json`
+### ✅ PHASE 5: Orchestrator & Telegram — SELESAI
 
-- [ ] **2.5.5** **GATE CHECK — WAJIB SEBELUM LANJUT KE PHASE 3:**
-│ Backtest dianggap LULUS jika memenuhi semua kriteria berikut:
-│ - Win rate ≥ **45%**
-│ - Profit factor ≥ **1.2**
-│ - Max drawdown ≤ **30%**
-│ - Total trades ≥ **50** (data cukup untuk statistik valid)
-│
-│ Jika GAGAL: perbaiki parameter indikator atau logika entry/exit di Phase 2, lalu ulangi backtest.
-│ **JANGAN lanjut ke Phase 3 sebelum gate check ini LULUS.**
+- [x] `src/main.py` — APScheduler 15 menit, full pipeline orchestration, asyncio + background thread
+- [x] `src/telegram/bot.py` — Router Command/Chat, send_notification helper
+- [x] `src/telegram/commands.py` — Handler output CommanderAgent
+- [x] Stress test (24 jam): belum dilakukan secara formal
 
----
+### ✅ PHASE 6: VPS Deployment — SELESAI
 
-## 📦 PHASE 3: Math Agents (Logic Only) (Estimasi: 3-4 Hari)
-*Tujuan: Membangun 7 Agent Python murni. DILARANG mengimpor `openai`, `groq`, atau library LLM apapun di phase ini.*
+- [x] **6.1** Whitelist IP VPS di Binance API Management
+- [x] **6.2** `/etc/systemd/system/crypto-agent.service` sudah dibuat
+- [x] Bisa dijalankan via `run.sh` dan PM2
+- [x] **6.3** Paper mode standalone di-skip — langsung integrasi ke Binance Futures Testnet di Phase 8. Paper trade tanpa exchange integration tidak menghasilkan data yang cukup valid untuk training RL.
 
-- [ ] **3.1** Buat Base Class di `src/agents/math/base_agent.py` (Menerima OHLCV, mengembalikan Pydantic Model).
-- [ ] **3.2** `src/agents/math/trend_agent.py`: Membaca DB H4, menentukan `BULLISH`, `BEARISH`, `RANGING`.
-- [ ] **3.3** `src/agents/math/reversal_agent.py`: Membaca DB H1, memanggil fungsi dari `indicators/luxalgo_smc.py` dan `mean_reversion.py`. Output: Signal + Confidence (0-100).
-- [ ] **3.4** `src/agents/math/confirmation_agent.py`: Membaca DB 15m, cek apakah mendukung sinyal H1.
-- [ ] **3.5** `src/agents/math/copytrade_agent.py`: Fetch API Binance Copy Trading, parse ke format Pydantic Model.
-- [ ] **3.6** `src/agents/math/risk_agent.py`: Membaca config, WAJIB menghitung SL/TP berdasarkan ATR, membaca Leverage dari Settings.
-- [ ] **3.7** `src/agents/math/execution_agent.py`: Mode Paper (Hanya `INSERT INTO paper_trades` status `OPEN`). **DILARANG** ada kode `exchange.create_order` di sini.
+### 🔄 PHASE 7: Reinforcement Learning — IMPLEMENTED (Siap Training)
 
----
+*Kode sudah ada. Karena paper trade standalone di-skip, data training RL berasal dari **backtest CSV** (bukan live paper trades). Ini valid karena backtest sudah pakai fee + slippage aktual.*
 
-## 📦 PHASE 4: LLM Agents Integration (Estimasi: 2-3 Hari)
-*Tujuan: Menghubungkan otak AI ke sistem dengan perlakuan berbeda untuk setiap model.*
+- [x] `src/rl/environment.py` — `TradingEnvironment`, state vector 13 fitur, reward shaping SKIP/ENTRY
+- [x] `src/rl/dqn_agent.py` — DQN + Thompson Sampling (Beta distribution per action), ONNX export
+- [x] `src/rl/trainer.py` — Multi-pair training loop, checkpoint saving, training curve plotting
+- [x] `src/rl/replay_buffer.py` — Experience replay buffer
+- [x] `src/rl/inference.py` — ONNX Runtime inference engine untuk VPS
+- [x] `test_rl_environment.py` — Unit tests reward shaping
+- [ ] **7.1** Jalankan backtest multi-pair untuk generate CSV training data:
+  ```bash
+  python scripts/run_backtest.py --pairs BTCUSDT,ETHUSDT,SOLUSDT \
+      --h4-csv data/historical/BTCUSDT-4h.csv \
+      --h1-csv data/historical/BTCUSDT-1h.csv \
+      --m15-csv data/historical/BTCUSDT-15m.csv
+  # Output: data/rl_training/*.csv (satu file per pair)
+  ```
+- [ ] **7.2** `scripts/export_trade_data.py` — **BELUM DIBUAT**, perlu dibuat untuk export CSV ke format yang kompatibel dengan `TradingEnvironment`
+- [ ] **7.3** Jalankan training di Google Colab (GPU T4):
+  ```python
+  # Upload data/rl_training/*.csv + src/rl/ ke Colab
+  # pip install torch onnx numpy pandas loguru
+  # Jalankan DQNTrainer, save best_model.onnx + normalization_params.npz
+  ```
+- [ ] **7.4** Upload model ke VPS:
+  ```bash
+  scp best_model.onnx normalization_params.npz root@vps:/path/data/rl_models/
+  ```
+- [ ] **7.5** Verifikasi RL filter di backtest:
+  ```bash
+  python scripts/run_backtest.py --pairs BTCUSDT --use-rl
+  ```
 
-- [ ] **4.1** Implementasi `src/agents/llm/analyst_agent.py`:
-│ - Gunakan library `openai` (karena Cerebras/Groq kompatibel OpenAI SDK).
-│ - Baca env: endpoint, API key, model dari `settings`.
-│ - Temperature **0.0**, `response_format={"type": "json_object"}`.
-│ - **WAJIB** ada `try-except` fallback ke Rule-Based logic jika API down/timeout.
-- [ ] **4.2** Implementasi `src/agents/llm/commander_agent.py`:
-│ - Setup sama seperti Analyst (Groq Llama 8B). Temp 0.0.
-│ - Tugasnya menerima string dari Telegram, mengembalikan nama fungsi Python yang harus dieksekusi.
-- [ ] **4.3** Implementasi `src/agents/llm/concierge_agent.py`:
-│ - Koneksi ke Modal GLM-5 via `openai` SDK + `base_url=str(settings.MODAL_BASE_URL)`.
-│ - **TIDAK PERLU install Modal SDK** — cukup openai SDK.
-│ - Temperature **0.7**. Timeout: `settings.CONCIERGE_TIMEOUT_SEC`. Max tokens: `settings.CONCIERGE_MAX_TOKENS`.
-│ - **DILARANG KERAS:** Jangan gunakan `json.loads()` atau `response_format={"type": "json_object"}`. GLM-5 adalah reasoning model.
-│ - Ambil raw text `response.choices[0].message.content` dan langsung kirim ke Telegram.
-│ - **WAJIB:** Implementasikan Concurrency Lock (jika GLM-5 sedang memproses, tolak chat baru selama durasi timeout).
+### 🎯 PHASE 8: Go Live + Testnet Integration — PRIORITAS SEKARANG
 
----
+*Phase ini sekaligus menggantikan paper trade standalone (Phase 6.3 yang di-skip). Data dari Testnet inilah yang akan dipakai sebagai training data Phase 7.*
 
-## 📦 PHASE 5: Paper Execution, SL/TP Manager & Telegram Bot (Estimasi: 3-4 Hari)
-*Tujuan: Menyatukan semua jadi 1 siklus utuh di `main.py`.*
+- [ ] **8.1** Set `.env`: `EXECUTION_MODE=live`, `USE_TESTNET=True`, `BINANCE_TESTNET_KEY`, `BINANCE_TESTNET_SECRET`
+- [ ] **8.2** Implementasi `execution_agent.py` Live mode:
+  ```python
+  # Sebelum entry:
+  exchange.set_leverage(leverage, symbol)
+  exchange.set_margin_mode('isolated', symbol)
 
-- [ ] **5.1** Implementasi `src/agents/math/sltp_manager.py`:
-│ - **HANYA BERLAKU UNTUK PAPER TRADE.**
-│ - Loop: `SELECT * FROM paper_trades WHERE status='OPEN'`.
-│ - Bandingkan Harga Close 15m saat ini dengan SL/TP.
-│ - Jika kena, `UPDATE status='CLOSED'`, hitung PnL.
-- [ ] **5.2** Implementasi `src/telegram/bot.py` dan `commands.py`:
-│ - Route pesan user ke `CommanderAgent` atau `ConciergeAgent`.
-│ - Implementasi handler untuk output `CommanderAgent`.
-- [ ] **5.3** Implementasi `src/main.py` (The Orchestrator):
-│ - Gunakan `APScheduler`.
-│ - Loop 15 menit: Fetch Data -> Run Math Agents -> Run LLM Analyst -> Run Risk -> Run Execution -> Run SLTP Manager.
-- [ ] **5.4** **STRESS TEST:** Jalankan di VPS selama 24 jam. Pantau RAM (jangan sampai *memory leak*), pastikan tidak crash.
+  # Entry:
+  exchange.create_order(symbol, 'market', side, amount)
 
----
-
-## 📦 PHASE 6: VPS Deployment (Estimasi: 1 Hari)
-*Tujuan: Pindah ke server 24/7.*
-
-- [ ] **6.1** Whitelist IP VPS di Binance API Management.
-- [ ] **6.2** Buat file `/etc/systemd/system/crypto-agent.service`.
-- [ ] **6.3** Run `PAPER MODE` di VPS selama minimal **2 minggu** untuk mengumpulkan data trade nyata.
-
----
-
-## 📦 PHASE 7: Reinforcement Learning — Google Colab (Estimasi: 3-5 Hari)
-*Tujuan: Melatih model RL menggunakan data paper trade dari Phase 6.*
-*⚠️ TRAINING DILAKUKAN DI GOOGLE COLAB, BUKAN DI VPS. VPS hanya untuk deploy model hasil training.*
-
-### Kenapa Colab, bukan VPS?
-VPS 4 vCPU / 8GB RAM terlalu kecil untuk training PyTorch. Jika dipaksakan, bot trading bisa crash OOM. Colab menyediakan GPU T4 gratis yang jauh lebih cepat dan zero risiko ke VPS.
-
-### Alur Kerja Phase 7
-
-- [ ] **7.1** **Export data dari VPS:**
-│ ```bash
-│ # Di VPS — jalankan script ini untuk export paper trade ke CSV
-│ python scripts/export_trade_data.py
-│ # Output: data/export/paper_trades_{timestamp}.csv
-│ # Download file ini ke lokal, lalu upload ke Google Colab
-│ ```
-
-- [ ] **7.2** Buat `scripts/export_trade_data.py`:
-│ - Query semua `paper_trades` dengan `status='CLOSED'` dari SQLite
-│ - Export ke CSV dengan kolom: pair, side, entry_price, sl, tp, pnl, leverage, timestamp
-│ - Minimum 100 closed trades sebelum training (data kurang = model tidak valid)
-
-- [ ] **7.3** Implementasi `src/rl/trading_env.py` (Custom `gymnasium.Env`):
-│ - *File ini ditulis di repo tapi dijalankan di Colab*
-│ - Observation space: output indikator SMC + mean reversion
-│ - Action space: LONG / SHORT / SKIP
-│ - Reward: PnL aktual dari paper trade history
-
-- [ ] **7.4** Implementasi `src/rl/train.py` (Menggunakan `stable-baselines3` PPO):
-│ - *Dijalankan di Colab — bukan di VPS*
-│ - Load CSV paper trade dari **7.1**
-│ - Training dengan `PPO` algorithm
-│ - Save model terbaik ke `data/rl_models/best_model.zip`
-
-- [ ] **7.5** **Di Google Colab:**
-│ 1. Upload `paper_trades_{timestamp}.csv` ke Colab
-│ 2. Clone repo atau upload `src/rl/` ke Colab
-│ 3. Install: `pip install gymnasium stable-baselines3 torch pandas`
-│ 4. Jalankan `train.py`
-│ 5. Download `best_model.zip` dari Colab
-
-- [ ] **7.6** **Upload model ke VPS:**
-│ ```bash
-│ # Di lokal/Termux — upload model ke VPS
-│ scp best_model.zip root@vps-ip:/path/to/project/data/rl_models/
-│ ```
-
-- [ ] **7.7** Integrasikan model ke `analyst_agent.py` sebagai salah satu input keputusan.
-
----
-
-## 📦 PHASE 8: Go Live & User Data WS (Estimasi: 3 Hari)
-*Tujuan: Menggunakan uang asli (Futures) dengan pengamanan maksimal tanpa OCO.*
-
-- [ ] **8.1** Ubah `.env`: `EXECUTION_MODE=live`. Pastikan `USE_TESTNET=False`.
-- [ ] **8.2** Ubah `execution_agent.py`:
-│ - **DILARANG MENGGUNAKAN `type='OCO'` (Tidak didukung di Futures).**
-│ - Sebelum entry, WAJIB jalankan: `exchange.set_leverage()` dan `exchange.set_margin_mode('isolated')`.
-│ - Kirim Entry Order (Market/Limit).
-│ - **SEGERA setelah Entry**, kirim **2 order terpisah secara berurutan**:
-│ │ 1. `exchange.create_order(symbol, 'stop_market', 'sell', amount, params={'stopPrice': sl_price, 'closePosition': True})`
-│ │ 2. `exchange.create_order(symbol, 'take_profit_market', 'sell', amount, params={'stopPrice': tp_price, 'closePosition': True})`
-- [ ] **8.3** Nonaktifkan `sltp_manager.py` (SL/TP sudah diserahkan ke Binance server).
+  # Segera setelah entry — 2 order terpisah:
+  exchange.create_order(symbol, 'stop_market', opposite_side, amount,
+      params={'stopPrice': sl_price, 'closePosition': True})
+  exchange.create_order(symbol, 'take_profit_market', opposite_side, amount,
+      params={'stopPrice': tp_price, 'closePosition': True})
+  ```
+  - **DILARANG** `type='OCO'` — tidak didukung di Futures.
+- [ ] **8.3** Nonaktifkan `sltp_manager.py` di live mode (SL/TP sudah di server Binance).
 - [ ] **8.4** Implementasi `src/data/ws_user_stream.py`:
-│ - Gunakan library `websockets` terhubung ke **User Data Stream** Binance.
-│ - **BUKAN market data stream** — hanya mendengarkan event `ORDER_TRADE_UPDATE`.
-│ - Jalankan sebagai `threading.Thread(daemon=True)` agar tidak memblokir loop 15 menit.
-│ - Jika menerima status `FILLED`, update DB `paper_trades` jadi `CLOSED` dan kirim notifikasi Telegram.
-- [ ] **8.5** Soft launch: gunakan `USE_TESTNET=True` + Leverage 1-2 + modal kecil di Testnet dulu.
-- [ ] **8.6** Jika Testnet mulus 48 jam tanpa error → set `USE_TESTNET=False` untuk Mainnet.
+  - User Data WebSocket (`wss://stream.binancefuture.com/ws` untuk testnet)
+  - Hanya dengarkan event `ORDER_TRADE_UPDATE`
+  - Jalankan sebagai `threading.Thread(daemon=True)` — tidak boleh blokir loop utama
+  - Jika menerima status `FILLED`: update `paper_trades` → `CLOSED`, kirim notif Telegram
+- [ ] **8.5** Jalankan di **Binance Testnet** 48 jam tanpa error
+- [ ] **8.6** Setelah cukup data dari Testnet (≥100 closed trades) → lanjut Phase 7 (training RL)
+- [ ] **8.7** Setelah RL model siap dan diverifikasi → set `USE_TESTNET=False` untuk Mainnet
 
 ---
 
-## 📋 SUCCESS METRICS SEBELUM NAIK KE LIVE
+## 📝 CATATAN TEKNIS PENTING
 
-Sebelum mengubah `EXECUTION_MODE=live`, syarat wajib:
-1. Backtest Phase 2.5 **LULUS** gate check (win rate ≥ 45%, profit factor ≥ 1.2).
-2. Sistem berjalan tanpa crash selama **30 hari** di VPS paper mode.
-3. Win rate paper trade di atas **50%** dengan estimasi slippage 0.1%.
-4. Kode SL/TP Order sudah ditest di **Binance Testnet** tanpa error.
+### Bugs yang sudah di-fix
+- **Bug #1:** Position size formula — sekarang fixed risk USD dengan leverage (bukan % dari balance)
+- **Bug #2:** SL/TP — ATR-based, bukan % flat
+- **Bug #3:** Exit check — pakai high/low candle, bukan close (look-ahead bias fix)
+- **Bug #4:** RR ratio — dibaca dari `settings.RISK_REWARD_RATIO`, tidak hardcode
+- **Bug #5:** SKIPPED trades — dieksklusi dari semua metrics calculation
+
+### Known Issues / Masih Perlu Perhatian
+- XRPUSDT bermasalah: ranging behavior menyebabkan TrendAgent selalu output RANGING. Perlu tuning `swing_size` atau threshold per-pair.
+- `scripts/export_trade_data.py` belum dibuat — diperlukan untuk Phase 7 setelah Testnet berjalan.
+- `src/data/onchain_fetcher.py` masih placeholder.
+- Binance Copy Trade agent (`copytrade_agent.py`) belum diimplementasi — ada di FR tapi tidak diprioritaskan.
+
+### File yang ada tapi tidak dipakai di production
+- `*.bak` files — backup manual, bisa dihapus
+- `examples/demo_environment.py` — demo saja
 
 ---
-*(File ini di-update dari versi awal. Architecture Addendum di bagian atas berlaku sebagai override untuk semua konflik dengan versi sebelumnya.)*
+
+## 📋 SUCCESS METRICS SEBELUM NAIK KE MAINNET
+
+1. Backtest Phase 2.5 **LULUS** gate check (win rate ≥ 45%, profit factor ≥ 1.2, max drawdown ≤ 30%). ✅
+2. Kode Entry + 2x Stop Market/TP Market ditest di **Binance Testnet** 48 jam tanpa error.
+3. Testnet menghasilkan minimal **100 closed trades** untuk data training RL.
+4. RL model dilatih di Colab, diverifikasi via `--use-rl` backtest, improvement terukur.
+5. Set `USE_TESTNET=False` → Mainnet.
+
+---
+
+*(File ini di-update April 2026. Architecture Addendum berlaku sebagai override untuk semua konflik dengan versi sebelumnya.)*
 

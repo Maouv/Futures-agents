@@ -79,11 +79,18 @@ class PaperTrade(Base):
     tp_price: Mapped[float] = mapped_column(Float, nullable=False)
     size: Mapped[float] = mapped_column(Float, nullable=False)             # Quantity dalam kontrak
     leverage: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(10), nullable=False, default="OPEN")  # 'OPEN' atau 'CLOSED'
+    status: Mapped[str] = mapped_column(String(15), nullable=False, default="OPEN")  # 'OPEN', 'CLOSED', 'PENDING_ENTRY', 'EXPIRED'
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)               # Diisi saat CLOSED
     entry_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     close_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    close_reason: Mapped[str | None] = mapped_column(String(10), nullable=True)   # 'TP', 'SL', 'MANUAL'
+    close_reason: Mapped[str | None] = mapped_column(String(15), nullable=True)   # 'TP', 'SL', 'MANUAL', 'EXPIRED', 'RECONCILED'
+
+    # ── Live mode columns (nullable, hanya terisi di EXECUTION_MODE='live') ──
+    execution_mode: Mapped[str | None] = mapped_column(String(10), nullable=True, default="paper")  # 'paper' atau 'live'
+    exchange_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Binance entry order ID
+    sl_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance SL order ID
+    tp_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance TP order ID
+    close_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Actual fill price saat SL/TP hit
 
 
 class TradeLog(Base):
@@ -104,6 +111,40 @@ def init_db() -> None:
     os.makedirs("data", exist_ok=True)
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized successfully.")
+
+
+def migrate_db() -> None:
+    """
+    Migrasi skema untuk existing databases.
+    Menambahkan kolom baru yang diperlukan Phase 8.
+
+    SQLAlchemy create_all() hanya membuat tabel baru — tidak menambah kolom
+    ke tabel yang sudah ada. Function ini melakukan ALTER TABLE ADD COLUMN
+    secara aman (IF NOT EXISTS via try/except).
+    """
+    new_columns = [
+        ("paper_trades", "execution_mode", "VARCHAR(10) DEFAULT 'paper'"),
+        ("paper_trades", "exchange_order_id", "VARCHAR(50)"),
+        ("paper_trades", "sl_order_id", "VARCHAR(50)"),
+        ("paper_trades", "tp_order_id", "VARCHAR(50)"),
+        ("paper_trades", "close_price", "FLOAT"),
+    ]
+
+    with engine.connect() as conn:
+        for table, column, col_type in new_columns:
+            try:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                    )
+                )
+                conn.commit()
+                logger.info(f"Migration: Added column {table}.{column}")
+            except Exception:
+                # Kolom sudah ada — aman untuk di-ignore
+                conn.rollback()
+
+    logger.info("Database migration completed.")
 
 
 @contextmanager

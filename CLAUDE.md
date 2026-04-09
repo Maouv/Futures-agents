@@ -901,47 +901,82 @@ Sebelum memulai Phase 2 (Porting LuxAlgo Indicators), pastikan:
 
 ---
 
-## ROADMAP LENGKAP SETELAH PHASE 1 (Referensi — Detail ada di `IMPLEMENTATION_PLAN.md`)
+## STATUS & ROADMAP (Update April 2026)
 
 > Master prompt ini hanya cover Phase 0 dan Phase 1 secara detail.
 > Untuk Phase 2 ke atas, **selalu baca `IMPLEMENTATION_PLAN.md`** sebagai source of truth.
-> Berikut ringkasan urutan yang WAJIB diikuti:
+
+### Status Saat Ini
 
 ```
-Phase 0 → Phase 1 → Phase 2 → Phase 2.5 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8
+✅ Phase 0  — Scaffolding, Config, DB
+✅ Phase 1  — Data Engine, Rate Limiter, Safety Checks
+✅ Phase 2  — Indikator SMC + Mean Reversion
+✅ Phase 2.5 — Backtest Engine (gate check LULUS: WR ~55%, PF ~1.53, MDD ~8.84%)
+✅ Phase 3  — Math Agents (Trend, Reversal, Confirmation, Risk, Execution, SLTPManager)
+✅ Phase 4  — LLM Agents (Analyst/Cerebras, Commander/Groq, Concierge/GLM-5)
+✅ Phase 5  — Orchestrator main.py + Telegram Bot
+✅ Phase 6  — VPS Deployment (systemd service, IP whitelist)
+🔄 Phase 7  — RL (kode sudah ada, training belum — tunggu data dari Phase 8)
+🎯 Phase 8  — PRIORITAS SEKARANG: Testnet integration + Live execution
 ```
 
-**Phase 2 — Porting Indikator (BLOCKING)**
-- Port 3 fungsi LuxAlgo dari `luxAlgo-pineScript.txt`: Order Blocks, FVG, BOS/CHOCH
-- Port RSI + Bollinger Bands ke `mean_reversion.py`
-- Validasi manual vs TradingView, toleransi `< 0.0001`
-- **JANGAN lanjut ke Phase 2.5 sebelum validasi PASS**
+### Koreksi Arsitektur Tambahan (Override)
 
-**Phase 2.5 — Backtest Engine & Gate Check (BLOCKING)**
-- Download data historis Binance Futures dari `https://data.binance.vision` (gratis, tanpa API key)
-- URL format: `https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/15m/BTCUSDT-15m-YYYY-MM.zip`
-- Buat folder `scripts/` untuk: `download_historical.py`, `load_historical_to_db.py`, `run_backtest.py`, `export_trade_data.py`
-- Buat `src/backtest/engine.py` — jalankan pipeline SMC terhadap data historis
-- **Gate check WAJIB LULUS sebelum Phase 3:**
-  - Win rate ≥ 45%
-  - Profit factor ≥ 1.2
-  - Max drawdown ≤ 30%
-  - Total trades ≥ 50
-- Jika gagal: perbaiki indikator Phase 2, ulangi backtest
+**#4 — RR Ratio tidak boleh hardcode**
+Baca selalu dari `settings.RISK_REWARD_RATIO`. DILARANG tulis angka literal RR di kode manapun.
 
-**Phase 3-6 — Agents, LLM, Execution, Deployment**
-- Ikuti `IMPLEMENTATION_PLAN.md` step by step
+**#5 — Exit check pakai high/low candle, bukan close**
+Mencegah look-ahead bias di backtest dan SLTPManager.
 
-**Phase 7 — RL Training di Google Colab (BUKAN VPS)**
-- `gymnasium`, `stable-baselines3`, `torch` — **JANGAN install di VPS**
-- Alur: export CSV dari VPS → upload ke Colab → training → download `best_model.zip` → upload ke VPS `data/rl_models/`
+**#6 — SKIPPED trades dieksklusi dari semua metrics**
+Win rate, profit factor, drawdown — hanya hitung executed trades (TP/SL/TIMEOUT).
+
+**#7 — RL menggunakan DQN + Thompson Sampling, BUKAN PPO**
+Algorithm: DQN dengan Beta distribution per action untuk exploration.
+Library: `torch` + custom training loop (bukan `stable-baselines3`).
+Export: ONNX → inference di VPS via `onnxruntime` (tanpa PyTorch).
+
+**#8 — Paper trade standalone di-skip**
+Paper trade tanpa Testnet integration tidak menghasilkan data yang valid.
+Data training RL berasal dari: (1) backtest CSV multi-pair, dan/atau (2) closed trades dari Testnet.
+
+**#9 — Multi-pair support**
+Backtest dan RL training support `--pairs BTCUSDT,ETHUSDT,SOLUSDT`.
+XRPUSDT bermasalah (ranging behavior) — hindari dulu atau tuning swing_size per-pair.
+
+### Phase 7 — RL Training di Google Colab (BUKAN VPS)
+
+- Library RL: `torch`, `onnx` — **JANGAN install di VPS** (OOM risk)
+- `onnxruntime` boleh di VPS (ringan, hanya untuk inference)
+- Alur:
+  1. Generate CSV dari backtest: `python scripts/run_backtest.py --pairs BTCUSDT,ETHUSDT`
+  2. Upload `data/rl_training/*.csv` + `src/rl/` ke Google Colab
+  3. Jalankan `DQNTrainer` di Colab (GPU T4 gratis)
+  4. Download `best_model.onnx` + `normalization_params.npz`
+  5. Upload ke VPS: `scp best_model.onnx root@vps:/path/data/rl_models/`
+  6. Test: `python scripts/run_backtest.py --pairs BTCUSDT --use-rl`
 - Jika user minta install torch di VPS: **INGATKAN risiko OOM**, sarankan Colab
 
-**Phase 8 — Go Live**
-- Wajib test Testnet dulu (`USE_TESTNET=True`)
-- Entry + 2x Stop/TP Market Order terpisah — **DILARANG OCO**
+### Phase 8 — Testnet → Mainnet (PRIORITAS SEKARANG)
+
+Phase ini sekaligus menggantikan paper trade standalone.
+
+- Set `.env`: `EXECUTION_MODE=live`, `USE_TESTNET=True`
+- Implementasi `execution_agent.py` live mode:
+  - `exchange.set_leverage()` + `exchange.set_margin_mode('isolated')`
+  - Entry Order (Market)
+  - **Segera** kirim 2 order terpisah: `stop_market` (SL) + `take_profit_market` (TP) dengan `closePosition=True`
+  - **DILARANG OCO** — tidak didukung di Futures
+- Implementasi `src/data/ws_user_stream.py`:
+  - User Data WebSocket, event `ORDER_TRADE_UPDATE` saja
+  - Background `threading.Thread(daemon=True)` — tidak boleh blokir loop utama
+- Nonaktifkan `sltp_manager.py` di live mode
+- Test Testnet 48 jam tanpa error → kumpul ≥100 closed trades → training RL Phase 7
+- Set `USE_TESTNET=False` → Mainnet
 
 ---
 *Generated by Claude — untuk dieksekusi via Claude Code CLI*
-*Versi: 2.0 | Tanggal: 2026-04*
+*Versi: 3.0 | Tanggal: 2026-04*
+
 

@@ -13,10 +13,10 @@ from typing import Optional
 
 import pandas as pd
 
-from src.config.settings import settings
 from src.data.storage import OHLCVCandle15m, OHLCVCandleH1, OHLCVCandleH4, get_session
 from src.utils.logger import logger
 from src.utils.rate_limiter import binance_limiter
+from src.utils.exchange import get_exchange
 
 
 # ── Session Windows (UTC) ────────────────────────────────────────────────────
@@ -42,68 +42,20 @@ TIMEFRAME_MAP = {
     "4h": ("ohlcv_h4", OHLCVCandleH4),
 }
 
-# Singleton exchange instance
-_exchange_instance: Optional[ccxt.binanceusdm] = None
+# Binance API weight table (per request)
+# OHLCV fetch (any TF): 10 weight per request
+# Fetch Balance: 10 weight per batch
+# Create Order: 1 weight per pair
+# Max: 6000 weight/menit
+WEIGHT_TABLE = {
+    "ohlcv": 10,
+    "balance": 10,
+    "order": 1,
+}
+WEIGHT_LIMIT_PER_MIN = 6000
 
-
-def _get_exchange() -> ccxt.binanceusdm:
-    """
-    Get or create singleton ccxt exchange instance.
-    Menghindari pembuatan instance baru setiap fetch yang bisa exhaust connection pool.
-    """
-    global _exchange_instance
-
-    if _exchange_instance is None:
-        _exchange_instance = _create_exchange()
-
-    return _exchange_instance
-
-
-def _create_exchange() -> ccxt.binanceusdm:
-    """
-    Factory function untuk ccxt exchange instance.
-    Otomatis switch ke testnet jika settings.USE_TESTNET = True.
-
-    recvWindow set to 60000ms (max allowed by Binance API).
-    adjustForTimeDifference=True enables ccxt to auto-sync with Binance server time.
-    """
-    # Common config for both testnet and production
-    base_config = {
-        "options": {
-            "defaultType": "future",
-        },
-        # recvWindow: 60000ms is the MAXIMUM allowed by Binance API
-        "recvWindow": 60000,
-        # CRITICAL: Auto-adjust for time difference
-        # ccxt will fetch Binance server time, calculate offset, and adjust all requests
-        # This solves the 80-second clock drift issue automatically
-        "adjustForTimeDifference": True,
-    }
-
-    if settings.USE_TESTNET:
-        config = {
-            **base_config,
-            "apiKey": settings.BINANCE_TESTNET_KEY.get_secret_value(),
-            "secret": settings.BINANCE_TESTNET_SECRET.get_secret_value(),
-            "urls": {
-                "api": {
-                    "public": str(settings.BINANCE_TESTNET_URL),
-                    "private": str(settings.BINANCE_TESTNET_URL),
-                }
-            }
-        }
-        exchange = ccxt.binanceusdm(config)
-        logger.debug("Exchange: Binance Futures TESTNET")
-    else:
-        config = {
-            **base_config,
-            "apiKey": settings.BINANCE_API_KEY.get_secret_value(),
-            "secret": settings.BINANCE_API_SECRET.get_secret_value(),
-        }
-        exchange = ccxt.binanceusdm(config)
-        logger.debug("Exchange: Binance Futures PRODUCTION")
-
-    return exchange
+# Session flag untuk weight logging
+_weight_logged_this_session = False
 
 
 def is_trading_session(dt: datetime) -> bool:
@@ -208,10 +160,60 @@ def detect_gap_in_batch(df: pd.DataFrame, timeframe: str) -> bool:
     return False
 
 
+def log_weight_summary(pair_count: int) -> None:
+    """
+    Log ringkasan estimasi API weight per cycle.
+    Hanya dipanggil sekali saat startup (bukan setiap cycle).
+    """
+    ohlcv_per_pair = 3  # 15m, 1h, 4h
+    total_ohlcv = pair_count * ohlcv_per_pair * WEIGHT_TABLE["ohlcv"]
+    total_balance = WEIGHT_TABLE["balance"]  # 1x per cycle
+    total_order = pair_count * WEIGHT_TABLE["order"]  # worst case
+    total_worst = total_ohlcv + total_balance + total_order
+    cycles_per_min = 1  # cycle tiap 15 menit
+
+    logger.info(
+        f"API Weight Estimate per cycle: "
+        f"OHLCV={total_ohlcv} ({pair_count} pairs × 3 TF × {WEIGHT_TABLE['ohlcv']}w) | "
+        f"Balance={total_balance} | Order(worst)={total_order} | "
+        f"Total(worst)={total_worst}/{WEIGHT_LIMIT_PER_MIN} "
+        f"({total_worst / WEIGHT_LIMIT_PER_MIN * 100:.1f}%)"
+    )
+
+
+def log_actual_weight(exchange: ccxt.binanceusdm) -> None:
+    """
+    Log actual weight usage dari Binance response header.
+    Dipanggil sekali di awal sesi (setelah first fetch berhasil).
+    """
+    global _weight_logged_this_session
+    if _weight_logged_this_session:
+        return
+
+    try:
+        headers = getattr(exchange, 'last_response_headers', None)
+        if headers is None:
+            return
+
+        for k in headers:
+            if k.lower() == 'x-mbxused-weight-1m':
+                used = headers[k]
+                pct = (int(used) / WEIGHT_LIMIT_PER_MIN) * 100
+                logger.info(
+                    f"Binance actual weight: {used}/{WEIGHT_LIMIT_PER_MIN} ({pct:.1f}%)"
+                )
+                _weight_logged_this_session = True
+                return
+    except Exception:
+        pass
+
+
 @binance_limiter.limit
 def _fetch_raw_ohlcv(exchange: ccxt.binanceusdm, symbol: str, timeframe: str, limit: int = 500) -> list:
     """Internal: Fetch raw OHLCV dari Binance. Dibungkus rate limiter."""
-    return exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    result = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    log_actual_weight(exchange)
+    return result
 
 
 def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
@@ -225,7 +227,7 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     Note: Session filter (FR-1.3) TIDAK menghentikan fetch/store.
     Session filter hanya memberikan flag ke caller via df.attrs['skip_trade'].
     """
-    exchange = _get_exchange()
+    exchange = get_exchange()
 
     # Get fetch limit based on timeframe
     limit = FETCH_LIMITS.get(timeframe, 500)
@@ -261,8 +263,12 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
 
     with get_session() as db:
         # OPTIMIZED: Bulk query untuk cek existing timestamps
-        # 1 query untuk semua timestamps, bukan 500 queries
-        timestamps_to_check = df["timestamp"].tolist()
+        # Konversi ke naive datetime (strip timezone) karena SQLite
+        # mengembalikan naive datetime saat membaca kolom DateTime
+        timestamps_to_check = [
+            ts.to_pydatetime().replace(tzinfo=None)
+            for ts in df["timestamp"]
+        ]
         existing = (
             db.query(model_class.timestamp)
             .filter(
@@ -273,15 +279,16 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
         )
         existing_timestamps = {t[0] for t in existing}
 
-        # Filter hanya candle baru
-        new_candles_df = df[~df['timestamp'].isin(existing_timestamps)]
+        # Filter hanya candle baru (strip timezone dari DataFrame juga)
+        df['_ts_naive'] = df['timestamp'].apply(lambda ts: ts.to_pydatetime().replace(tzinfo=None))
+        new_candles_df = df[~df['_ts_naive'].isin(existing_timestamps)]
 
         if not new_candles_df.empty:
             # OPTIMIZED: Bulk insert dengan dict mappings
             # 1 query untuk semua inserts, bukan 500 queries
             new_candles = [
                 {
-                    "timestamp": row["timestamp"].to_pydatetime(),
+                    "timestamp": row["timestamp"].to_pydatetime().replace(tzinfo=None),
                     "open": row["open"],
                     "high": row["high"],
                     "low": row["low"],
@@ -295,6 +302,10 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
             logger.debug(f"Inserted {len(new_candles)} new candles for {symbol} {timeframe}")
         else:
             logger.debug(f"No new candles to insert for {symbol} {timeframe}")
+
+        # Cleanup kolom helper
+        if '_ts_naive' in df.columns:
+            df.drop(columns=['_ts_naive'], inplace=True)
 
     logger.info(f"Fetched & stored {len(df)} candles for {symbol} {timeframe}")
 
