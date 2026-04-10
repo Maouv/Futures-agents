@@ -453,8 +453,15 @@ class ExecutionAgent(BaseAgent):
             )
 
         # ── Update DB ──────────────────────────────────────────────────────
+        # Extract attributes sebelum session operations (defensive against expire_on_commit)
+        trade_id = trade.id
+        trade_pair = trade.pair
+        trade_side = trade.side
+        trade_sl_price = trade.sl_price
+        trade_tp_price = trade.tp_price
+
         with get_session() as db:
-            db_trade = db.query(PaperTrade).get(trade.id)
+            db_trade = db.query(PaperTrade).get(trade_id)
             if db_trade:
                 db_trade.status = 'OPEN'
                 db_trade.entry_price = filled_price
@@ -464,10 +471,10 @@ class ExecutionAgent(BaseAgent):
                 db_trade.exchange_order_id = str(order.get('id', trade.exchange_order_id))
 
         self._log(
-            f"LIVE TRADE OPENED | ID: {trade.id} | "
-            f"{trade.pair} {trade.side} | "
+            f"LIVE TRADE OPENED | ID: {trade_id} | "
+            f"{trade_pair} {trade_side} | "
             f"Entry: {filled_price:.2f} | "
-            f"SL: {trade.sl_price:.2f} | TP: {trade.tp_price:.2f} | "
+            f"SL: {trade_sl_price:.2f} | TP: {trade_tp_price:.2f} | "
             f"SL_Order: {sl_order_id} | TP_Order: {tp_order_id}"
         )
 

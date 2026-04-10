@@ -37,7 +37,8 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
 
     with get_session() as db:
         open_trades = db.query(PaperTrade).filter(
-            PaperTrade.status == 'OPEN'
+            PaperTrade.status == 'OPEN',
+            PaperTrade.execution_mode == 'paper',
         ).all()
 
         if not open_trades:

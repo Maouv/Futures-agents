@@ -15,17 +15,22 @@ from src.utils.logger import logger
 
 
 def cmd_menu() -> str:
-    """Tampilkan menu + ringkasan cepat."""
+    """Tampilkan menu + ringkasan cepat (filtered by current mode)."""
     kill_status = "ON" if check_kill_switch() else "OFF"
+    mode = "paper" if settings.EXECUTION_MODE != "live" else ("testnet" if settings.USE_TESTNET else "mainnet")
     with get_session() as db:
         open_count = db.query(PaperTrade).filter(
-            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY'])
+            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+            PaperTrade.execution_mode == mode,
         ).count()
-        closed = db.query(PaperTrade).filter(PaperTrade.status == 'CLOSED').all()
+        closed = db.query(PaperTrade).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == mode,
+        ).all()
         total_pnl = sum(t.pnl or 0 for t in closed)
 
     return (
-        f"== MENU ==\n"
+        f"== MENU [{mode.upper()}] ==\n"
         f"Open: {open_count} | PnL: ${total_pnl:.2f} | Kill: {kill_status}\n"
         f"\n"
         f"/status  — Mode, leverage, kill switch\n"
