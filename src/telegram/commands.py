@@ -8,10 +8,94 @@ DESAIN: Tidak ada manual close (/close, /closeall). Trade hanya ditutup oleh
 SL/TP (Binance server-side di live mode, SLTPManager di paper mode).
 Alasan: "Kalo dah masuk trade, bodo amat mau kena SL atau TP" — biar SL/TP natural.
 """
+from datetime import datetime, timezone
+
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.kill_switch import create_kill_switch, remove_kill_switch, check_kill_switch
 from src.utils.logger import logger
+
+
+def _get_current_mode() -> str:
+    """Return current execution mode tag: 'paper', 'testnet', or 'mainnet'."""
+    if settings.EXECUTION_MODE != "live":
+        return "paper"
+    return "testnet" if settings.USE_TESTNET else "mainnet"
+
+
+def _cleanup_mode_trades(mode: str) -> int:
+    """
+    Tutup semua open/pending trades untuk mode tertentu.
+    - Paper: cuma update DB (tidak ada order di exchange)
+    - Testnet: cancel orders + close position di Binance testnet (uang palsu)
+    - Mainnet: TIDAK diizinkan — harus manual close
+
+    Returns jumlah trades yang ditutup.
+    """
+    closed_count = 0
+
+    with get_session() as db:
+        trades = db.query(PaperTrade).filter(
+            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+            PaperTrade.execution_mode == mode,
+        ).all()
+
+        if not trades:
+            return 0
+
+        if mode == 'mainnet':
+            # JANGAN auto-close mainnet — uang asli
+            return -1  # Signal bahwa ada trades tapi tidak bisa auto-close
+
+        for trade in trades:
+            if mode == 'testnet':
+                # Cancel orders di Binance testnet
+                try:
+                    from src.utils.exchange import get_exchange
+                    exchange = get_exchange()
+                    close_side = 'sell' if trade.side == 'LONG' else 'buy'
+
+                    # Cancel SL, TP, dan entry orders
+                    if trade.sl_order_id:
+                        try:
+                            exchange.cancel_order(trade.sl_order_id, trade.pair)
+                        except Exception:
+                            pass
+                    if trade.tp_order_id:
+                        try:
+                            exchange.cancel_order(trade.tp_order_id, trade.pair)
+                        except Exception:
+                            pass
+                    if trade.status == 'PENDING_ENTRY' and trade.exchange_order_id:
+                        try:
+                            exchange.cancel_order(trade.exchange_order_id, trade.pair)
+                        except Exception:
+                            pass
+
+                    # Close position jika OPEN (ada posisi aktif)
+                    if trade.status == 'OPEN':
+                        try:
+                            amount = exchange.amount_to_precision(trade.pair, trade.size)
+                            exchange.create_order(
+                                symbol=trade.pair,
+                                type='market',
+                                side=close_side,
+                                amount=float(amount),
+                                params={'reduceOnly': True}
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to close position for trade {trade.id}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Error during testnet cleanup for trade {trade.id}: {e}")
+
+            # Update DB — baik paper maupun testnet
+            trade.status = 'CLOSED'
+            trade.close_reason = 'MODE_SWITCH'
+            trade.close_timestamp = datetime.now(timezone.utc)
+            closed_count += 1
+
+    return closed_count
 
 
 def cmd_menu() -> str:
@@ -162,35 +246,77 @@ def cmd_resume() -> str:
 def cmd_switch_mode(mode: str = "") -> str:
     """Switch antara paper, testnet, mainnet (runtime only).
 
-    NOTE: Mode switch me-reset exchange instance agar API call menggunakan
-    credentials yang benar. WebSocket stream TIDAK di-restart secara otomatis —
+    Mode switch akan:
+    1. Cek open trades di mode saat ini
+    2. Auto-close trades di paper/testnet (tidak ada risiko uang)
+    3. Block switch dari mainnet jika masih ada open trades
+    4. Reset exchange instance agar API call menggunakan credentials yang benar
+
+    NOTE: WebSocket stream TIDAK di-restart secara otomatis —
     butuh restart bot untuk menerapkan perubahan WS.
     """
     from src.utils.exchange import reset_exchange
     mode = mode.strip().lower()
+    current_mode = _get_current_mode()
 
     if mode == "paper":
+        if current_mode == "mainnet":
+            # Cek apakah ada open mainnet trades
+            closed = _cleanup_mode_trades("mainnet")
+            if closed == -1:
+                return (
+                    "DITOLAK: Masih ada open trades di MAINNET. "
+                    "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
+                )
+
+        closed = _cleanup_mode_trades(current_mode) if current_mode != "paper" else 0
         settings.EXECUTION_MODE = "paper"
         settings.USE_TESTNET = False
         reset_exchange()
-        return "Mode: PAPER (simulasi lokal). Restart kembali ke .env."
+        msg = "Mode: PAPER (simulasi lokal). Restart kembali ke .env."
+        if closed > 0:
+            msg = f"Mode: PAPER. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg
 
     elif mode == "testnet":
+        if current_mode == "mainnet":
+            closed = _cleanup_mode_trades("mainnet")
+            if closed == -1:
+                return (
+                    "DITOLAK: Masih ada open trades di MAINNET. "
+                    "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
+                )
+
+        closed = _cleanup_mode_trades(current_mode) if current_mode not in ("testnet", "paper") else 0
         settings.EXECUTION_MODE = "live"
         settings.USE_TESTNET = True
         reset_exchange()
-        return "Mode: TESTNET (Binance Futures Testnet). Restart kembali ke .env."
+        msg = "Mode: TESTNET (Binance Futures Testnet). Restart kembali ke .env."
+        if closed > 0:
+            msg = f"Mode: TESTNET. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg
 
     elif mode == "mainnet":
         if not settings.CONFIRM_MAINNET:
             return "DITOLAK: CONFIRM_MAINNET=False. Set CONFIRM_MAINNET=True di .env dulu."
+
+        closed = _cleanup_mode_trades(current_mode) if current_mode != "mainnet" else 0
+        if closed == -1:
+            return (
+                "DITOLAK: Masih ada open trades di MAINNET. "
+                "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
+            )
+
         settings.EXECUTION_MODE = "live"
         settings.USE_TESTNET = False
         reset_exchange()
-        return "Mode: MAINNET (Binance Futures Production — UANG ASLI). Restart kembali ke .env."
+        msg = "Mode: MAINNET (Binance Futures Production — UANG ASLI). Restart kembali ke .env."
+        if closed > 0:
+            msg = f"Mode: MAINNET. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg
 
     else:
-        current = "PAPER" if settings.EXECUTION_MODE != "live" else ("TESTNET" if settings.USE_TESTNET else "MAINNET")
+        current = _get_current_mode().upper()
         return (
             f"Mode saat ini: {current}\n"
             f"Gunakan:\n"

@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     CONFIRM_MAINNET: bool = Field(default=False, description="Wajib True jika USE_TESTNET=False. Speed bump untuk mencegah accidental mainnet.")
     MAX_OPEN_POSITIONS: int = Field(default=1, ge=1, le=10, description="Max posisi terbuka PER PAIR (bukan global)")
     ORDER_EXPIRY_CANDLES: int = Field(default=48, ge=1, description="Limit order kadaluarsa setelah N candle H1. Default 48 = 2 hari")
+    DISABLE_SESSION_FILTER: bool = Field(default=False, description="Set True HANYA untuk testing. Jika False, trade hanya di London/NY session (FR-1.3)")
 
 
 # Singleton — import ini di mana saja

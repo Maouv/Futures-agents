@@ -3,14 +3,16 @@ storage.py — SQLAlchemy models dan session factory.
 Semua akses database WAJIB melalui session dari get_session().
 DILARANG menulis raw SQL string.
 """
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Generator
 from contextlib import contextmanager
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, String, Text,
-    create_engine, Index, text
+    create_engine, Index, text, event
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker, Mapped, mapped_column
 
 from src.utils.logger import logger
@@ -23,6 +25,15 @@ engine = create_engine(
     connect_args={"check_same_thread": False},  # Diperlukan untuk SQLite + threading
     echo=False,
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    """Set SQLite pragmas saat koneksi baru dibuat."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -83,7 +94,7 @@ class PaperTrade(Base):
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)               # Diisi saat CLOSED
     entry_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     close_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    close_reason: Mapped[str | None] = mapped_column(String(15), nullable=True)   # 'TP', 'SL', 'MANUAL', 'EXPIRED', 'RECONCILED'
+    close_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)   # 'TP', 'SL', 'MANUAL', 'EXPIRED', 'RECONCILED', 'EMERGENCY_CLOSE_SL_FAIL', 'MODE_SWITCH'
 
     # ── Live mode columns (nullable, hanya terisi di EXECUTION_MODE='live') ──
     execution_mode: Mapped[str | None] = mapped_column(String(10), nullable=True, default="paper")  # 'paper' atau 'live'
@@ -98,7 +109,10 @@ class TradeLog(Base):
     __allow_unmapped__ = True
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     level: Mapped[str] = mapped_column(String(10), nullable=False)         # 'INFO', 'WARNING', 'ERROR'
     source: Mapped[str] = mapped_column(String(50), nullable=False)        # Nama agent yang log
     message: Mapped[str] = mapped_column(Text, nullable=False)
@@ -130,6 +144,15 @@ def migrate_db() -> None:
         ("paper_trades", "close_price", "FLOAT"),
     ]
 
+    # Widen close_reason column to fit new reasons (EMERGENCY_CLOSE_SL_FAIL, MODE_SWITCH)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE paper_trades ALTER COLUMN close_reason TYPE VARCHAR(30)"))
+            conn.commit()
+            logger.info("Migration: Widened close_reason column to VARCHAR(30)")
+    except Exception:
+        pass  # Column already wide enough or not applicable
+
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
             try:
@@ -150,14 +173,37 @@ def migrate_db() -> None:
 
 
 @contextmanager
-def get_session() -> Generator[Session, None, None]:
-    """Context manager untuk database session. Gunakan dengan `with get_session() as db:`."""
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+def get_session(max_retries: int = 3) -> Generator[Session, None, None]:
+    """
+    Context manager untuk database session. Gunakan dengan `with get_session() as db:`.
+
+    Auto-commits on exit. Setiap `with get_session()` adalah satu transaction boundary —
+    semua perubahan di dalam block akan di-commit saat exit (jika tidak ada exception).
+    Untuk operasi multi-step yang harus atomic, gunakan SATU block, jangan multiple blocks.
+
+    Retries up to max_retries on "database is locked" errors with exponential backoff.
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        db = SessionLocal()
+        try:
+            yield db
+            db.commit()
+            return
+        except OperationalError as e:
+            db.rollback()
+            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                backoff = 0.5 * (attempt + 1)
+                logger.warning(f"DB locked, retry {attempt + 1}/{max_retries} in {backoff:.1f}s")
+                time.sleep(backoff)
+                last_error = e
+                continue
+            raise
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    # Should not reach here, but just in case
+    if last_error:
+        raise last_error

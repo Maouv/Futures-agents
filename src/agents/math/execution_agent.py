@@ -13,6 +13,7 @@ LIVE MODE:
 - Jika EXPIRED (ORDER_EXPIRY_CANDLES tercapai) → cancel order, status='EXPIRED'
 """
 import ccxt
+import time
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
@@ -26,6 +27,10 @@ from src.agents.math.trend_agent import TrendResult
 from src.utils.exchange import get_exchange, reset_exchange
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
+
+# ── SL Retry Constants ────────────────────────────────────────────────────
+SL_MAX_RETRIES = 3
+SL_RETRY_BACKOFF_BASE = 2  # seconds, exponential
 
 
 class ExecutionResult(BaseModel):
@@ -311,21 +316,37 @@ class ExecutionAgent(BaseAgent):
             )
 
             for trade in pending_trades:
-                result = self._check_single_pending(trade)
+                # Extract ke dict SEBELUM session close untuk menghindari DetachedInstanceError
+                trade_data = {
+                    'id': trade.id,
+                    'pair': trade.pair,
+                    'side': trade.side,
+                    'entry_price': trade.entry_price,
+                    'sl_price': trade.sl_price,
+                    'tp_price': trade.tp_price,
+                    'size': trade.size,
+                    'exchange_order_id': trade.exchange_order_id,
+                    'entry_timestamp': trade.entry_timestamp,
+                }
+                result = self._check_single_pending(trade_data)
                 results.append(result)
 
         return results
 
-    def _check_single_pending(self, trade: PaperTrade) -> dict:
+    def _check_single_pending(self, trade: dict) -> dict:
         """
         Cek satu pending trade: sudah filled, expired, atau masih menunggu?
+        Menerima dict (bukan PaperTrade) untuk menghindari DetachedInstanceError.
         """
         exchange = get_exchange()
-        result = {"trade_id": trade.id, "pair": trade.pair, "action": "none"}
+        trade_id = trade['id']
+        trade_pair = trade['pair']
+        trade_exchange_order_id = trade['exchange_order_id']
+        result = {"trade_id": trade_id, "pair": trade_pair, "action": "none"}
 
         try:
             # ── Cek Order Status di Binance ────────────────────────────────
-            order = exchange.fetch_order(trade.exchange_order_id, trade.pair)
+            order = exchange.fetch_order(trade_exchange_order_id, trade_pair)
             order_status = order.get('status', 'unknown')
 
             if order_status == 'filled':
@@ -334,36 +355,36 @@ class ExecutionAgent(BaseAgent):
             elif order_status == 'canceled' or order_status == 'expired':
                 # Order di-cancel secara eksternal — update DB
                 with get_session() as db:
-                    db_trade = db.query(PaperTrade).get(trade.id)
+                    db_trade = db.query(PaperTrade).get(trade_id)
                     if db_trade:
                         db_trade.status = 'EXPIRED'
                         db_trade.close_reason = 'EXPIRED'
                         db_trade.close_timestamp = datetime.now(timezone.utc)
 
-                self._log(f"Order {trade.exchange_order_id} canceled/expired externally")
+                self._log(f"Order {trade_exchange_order_id} canceled/expired externally")
                 result["action"] = "expired"
 
             elif order_status == 'open':
                 # Masih menunggu — cek kadaluarsa
-                hours_elapsed = (datetime.now(timezone.utc) - trade.entry_timestamp).total_seconds() / 3600
+                hours_elapsed = (datetime.now(timezone.utc) - trade['entry_timestamp']).total_seconds() / 3600
                 candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
                 candles_remaining = settings.ORDER_EXPIRY_CANDLES - candles_elapsed
 
                 if candles_elapsed >= settings.ORDER_EXPIRY_CANDLES:
                     # Kadaluarsa — cancel order di Binance
                     try:
-                        exchange.cancel_order(trade.exchange_order_id, trade.pair)
+                        exchange.cancel_order(trade_exchange_order_id, trade_pair)
                         self._log(
                             f"Limit order EXPIRED after {candles_elapsed:.1f} H1 candles | "
-                            f"Trade {trade.id} | Order {trade.exchange_order_id}"
+                            f"Trade {trade_id} | Order {trade_exchange_order_id}"
                         )
                     except ccxt.OrderNotFound:
-                        self._log(f"Order {trade.exchange_order_id} already gone — treating as expired")
+                        self._log(f"Order {trade_exchange_order_id} already gone — treating as expired")
                     except Exception as e:
-                        self._log_error(f"Failed to cancel expired order {trade.exchange_order_id}: {e}")
+                        self._log_error(f"Failed to cancel expired order {trade_exchange_order_id}: {e}")
 
                     with get_session() as db:
-                        db_trade = db.query(PaperTrade).get(trade.id)
+                        db_trade = db.query(PaperTrade).get(trade_id)
                         if db_trade:
                             db_trade.status = 'EXPIRED'
                             db_trade.close_reason = 'EXPIRED'
@@ -372,20 +393,20 @@ class ExecutionAgent(BaseAgent):
                     result["action"] = "expired"
                 else:
                     self._log(
-                        f"Pending order still waiting | Trade {trade.id} | "
+                        f"Pending order still waiting | Trade {trade_id} | "
                         f"{candles_remaining:.1f} H1 candles remaining"
                     )
                     result["action"] = "waiting"
 
             else:
                 self._log_error(
-                    f"Unknown order status '{order_status}' for trade {trade.id}"
+                    f"Unknown order status '{order_status}' for trade {trade_id}"
                 )
 
         except ccxt.OrderNotFound:
-            self._log_error(f"Order {trade.exchange_order_id} not found on exchange")
+            self._log_error(f"Order {trade_exchange_order_id} not found on exchange")
             with get_session() as db:
-                db_trade = db.query(PaperTrade).get(trade.id)
+                db_trade = db.query(PaperTrade).get(trade_id)
                 if db_trade:
                     db_trade.status = 'EXPIRED'
                     db_trade.close_reason = 'EXPIRED'
@@ -393,73 +414,126 @@ class ExecutionAgent(BaseAgent):
             result["action"] = "expired"
 
         except Exception as e:
-            self._log_error(f"Error checking pending order {trade.id}: {e}")
+            self._log_error(f"Error checking pending order {trade_id}: {e}")
             result["action"] = "error"
 
         return result
 
-    def _handle_fill(self, trade: PaperTrade, order: dict, exchange) -> dict:
+    def _handle_fill(self, trade: dict, order: dict, exchange) -> dict:
         """
         Limit order sudah FILLED — pasang SL + TP di Binance.
-        Ini momen paling kritis: kalau SL/TP gagal, posisi TIDAK terproteksi.
+        Ini momen paling kritis: kalau SL gagal setelah retry, emergency close posisi.
+        Menerima dict (bukan PaperTrade) untuk menghindari DetachedInstanceError.
         """
-        result = {"trade_id": trade.id, "pair": trade.pair, "action": "filled"}
-        filled_price = float(order.get('average', order.get('price', trade.entry_price)))
-        filled_amount = float(order.get('filled', trade.size))
+        result = {"trade_id": trade['id'], "pair": trade['pair'], "action": "filled"}
+        filled_price = float(order.get('average', order.get('price', trade['entry_price'])))
+        filled_amount = float(order.get('filled', trade['size']))
 
-        # Update entry_price dengan actual fill price
-        close_side = 'sell' if trade.side == 'LONG' else 'buy'
+        # Extract attributes dari dict
+        trade_id = trade['id']
+        trade_pair = trade['pair']
+        trade_side = trade['side']
+        trade_sl_price = trade['sl_price']
+        trade_tp_price = trade['tp_price']
 
-        # ── Place SL (stop_market) ────────────────────────────────────────
+        close_side = 'sell' if trade_side == 'LONG' else 'buy'
+
+        # ── Place SL (stop_market) with retry ──────────────────────────────
         sl_order_id = None
-        try:
-            sl_order = exchange.create_order(
-                symbol=trade.pair,
-                type='stop_market',
-                side=close_side,
-                params={
-                    'stopPrice': exchange.price_to_precision(trade.pair, trade.sl_price),
-                    'closePosition': True,
-                    'reduceOnly': True,
-                }
-            )
-            sl_order_id = str(sl_order['id'])
-            self._log(f"SL order placed | ID: {sl_order_id} | Stop: {trade.sl_price:.2f}")
-        except Exception as e:
+        for attempt in range(1, SL_MAX_RETRIES + 1):
+            try:
+                sl_order = exchange.create_order(
+                    symbol=trade_pair,
+                    type='stop_market',
+                    side=close_side,
+                    params={
+                        'stopPrice': exchange.price_to_precision(trade_pair, trade_sl_price),
+                        'closePosition': True,
+                        'reduceOnly': True,
+                    }
+                )
+                sl_order_id = str(sl_order['id'])
+                self._log(f"SL order placed | ID: {sl_order_id} | Stop: {trade_sl_price:.2f}")
+                break
+            except Exception as e:
+                self._log_error(
+                    f"SL order attempt {attempt}/{SL_MAX_RETRIES} FAILED for trade {trade_id}: {e}"
+                )
+                if attempt < SL_MAX_RETRIES:
+                    backoff = SL_RETRY_BACKOFF_BASE ** attempt
+                    self._log(f"Retrying SL in {backoff}s...")
+                    time.sleep(backoff)
+
+        # ── SL gagal total → Emergency Market Close ────────────────────────
+        if sl_order_id is None:
             self._log_error(
-                f"CRITICAL: SL order FAILED for trade {trade.id}! "
-                f"Position is UNPROTECTED. Error: {e}"
+                f"CRITICAL: SL order FAILED after {SL_MAX_RETRIES} retries for trade {trade_id}! "
+                f"Emergency closing position to prevent unprotected exposure."
             )
+            emergency_close_price = None
+            try:
+                close_order = exchange.create_order(
+                    symbol=trade_pair,
+                    type='market',
+                    side=close_side,
+                    amount=exchange.amount_to_precision(trade_pair, filled_amount),
+                    params={'reduceOnly': True}
+                )
+                emergency_close_price = float(close_order.get('average', close_order.get('price', filled_price)))
+                self._log(f"Emergency close executed at {emergency_close_price:.2f}")
+            except Exception as e2:
+                self._log_error(f"EMERGENCY CLOSE ALSO FAILED: {e2}. Manual intervention required!")
+                emergency_close_price = filled_price  # fallback
+
+            # Hitung PnL dari emergency close
+            if trade_side == 'LONG':
+                emergency_pnl = (emergency_close_price - filled_price) * filled_amount
+            else:
+                emergency_pnl = (filled_price - emergency_close_price) * filled_amount
+
+            with get_session() as db:
+                db_trade = db.query(PaperTrade).get(trade_id)
+                if db_trade:
+                    db_trade.status = 'CLOSED'
+                    db_trade.close_reason = 'EMERGENCY_CLOSE_SL_FAIL'
+                    db_trade.close_price = emergency_close_price
+                    db_trade.pnl = emergency_pnl
+                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.entry_price = filled_price
+                    db_trade.size = filled_amount
+                    db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
+
+            self._log(
+                f"TRADE EMERGENCY CLOSED | ID: {trade_id} | "
+                f"{trade_pair} {trade_side} | "
+                f"Entry: {filled_price:.2f} | Close: {emergency_close_price:.2f} | "
+                f"PnL: ${emergency_pnl:.2f} | Reason: SL_FAIL"
+            )
+            result["action"] = "emergency_closed"
+            return result
 
         # ── Place TP (take_profit_market) ─────────────────────────────────
         tp_order_id = None
         try:
             tp_order = exchange.create_order(
-                symbol=trade.pair,
+                symbol=trade_pair,
                 type='take_profit_market',
                 side=close_side,
                 params={
-                    'stopPrice': exchange.price_to_precision(trade.pair, trade.tp_price),
+                    'stopPrice': exchange.price_to_precision(trade_pair, trade_tp_price),
                     'closePosition': True,
                     'reduceOnly': True,
                 }
             )
             tp_order_id = str(tp_order['id'])
-            self._log(f"TP order placed | ID: {tp_order_id} | Stop: {trade.tp_price:.2f}")
+            self._log(f"TP order placed | ID: {tp_order_id} | Stop: {trade_tp_price:.2f}")
         except Exception as e:
             self._log_error(
-                f"ERROR: TP order FAILED for trade {trade.id}. "
+                f"ERROR: TP order FAILED for trade {trade_id}. "
                 f"SL still protects capital. Error: {e}"
             )
 
         # ── Update DB ──────────────────────────────────────────────────────
-        # Extract attributes sebelum session operations (defensive against expire_on_commit)
-        trade_id = trade.id
-        trade_pair = trade.pair
-        trade_side = trade.side
-        trade_sl_price = trade.sl_price
-        trade_tp_price = trade.tp_price
-
         with get_session() as db:
             db_trade = db.query(PaperTrade).get(trade_id)
             if db_trade:
@@ -468,7 +542,7 @@ class ExecutionAgent(BaseAgent):
                 db_trade.size = filled_amount
                 db_trade.sl_order_id = sl_order_id
                 db_trade.tp_order_id = tp_order_id
-                db_trade.exchange_order_id = str(order.get('id', trade.exchange_order_id))
+                db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
 
         self._log(
             f"LIVE TRADE OPENED | ID: {trade_id} | "

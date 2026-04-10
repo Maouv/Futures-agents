@@ -1,7 +1,7 @@
 """
 rate_limiter.py — Sliding window rate limiter untuk semua HTTP calls ke Binance.
 MAX 800 request/menit sesuai PRD FR-1.1.
-Thread-safe menggunakan threading.Lock.
+Thread-safe menggunakan threading.Condition untuk mencegah race condition.
 """
 import threading
 import time
@@ -15,7 +15,7 @@ T = TypeVar("T")
 
 class RateLimiter:
     """
-    Sliding window rate limiter.
+    Sliding window rate limiter menggunakan Condition Variable.
 
     Usage:
         limiter = RateLimiter(max_calls=800, period=60)
@@ -30,37 +30,31 @@ class RateLimiter:
         self.period = period
         self._calls: deque[float] = deque()
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
 
     def wait_if_needed(self) -> None:
-        """Block sampai slot tersedia dalam window."""
-        # Calculate sleep time outside lock
-        sleep_time = 0.0
-
-        with self._lock:
-            now = time.monotonic()
-
-            # Buang timestamps di luar window
-            while self._calls and self._calls[0] <= now - self.period:
-                self._calls.popleft()
-
-            if len(self._calls) >= self.max_calls:
-                # Hitung waktu tunggu
-                sleep_time = self._calls[0] + self.period - now
-
-        # Sleep di luar lock agar thread lain bisa akses
-        if sleep_time > 0:
-            logger.warning(f"Rate limit reached. Waiting {sleep_time:.2f}s")
-            time.sleep(sleep_time)
-
-            # Re-check setelah sleep
-            with self._lock:
+        """Block sampai slot tersedia dalam window. Menggunakan condition variable."""
+        with self._condition:
+            while True:
                 now = time.monotonic()
+
+                # Buang timestamps di luar window
                 while self._calls and self._calls[0] <= now - self.period:
                     self._calls.popleft()
+                    # Notify thread lain yang mungkin menunggu slot
+                    self._condition.notify()
 
-        # Record this call
-        with self._lock:
-            self._calls.append(time.monotonic())
+                if len(self._calls) < self.max_calls:
+                    # Slot tersedia — record this call dan return
+                    self._calls.append(time.monotonic())
+                    return
+
+                # Hitung waktu tunggu sampai slot tertua expired
+                sleep_time = self._calls[0] + self.period - now
+                if sleep_time > 0:
+                    logger.warning(f"Rate limit reached. Waiting {sleep_time:.2f}s")
+                    self._condition.wait(timeout=sleep_time)
+                    # Setelah wakeup, loop akan re-check apakah slot sudah tersedia
 
     def limit(self, func: Callable[..., T]) -> Callable[..., T]:
         """Decorator untuk membungkus fungsi dengan rate limiting."""

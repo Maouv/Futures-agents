@@ -53,37 +53,52 @@ async def _execute_command(result) -> str:
 
 def _get_trade_context() -> str:
     """Ambil summary trades untuk context Concierge, dipisah per mode."""
+    from sqlalchemy import func
     from src.data.storage import PaperTrade, get_session
     with get_session() as db:
-        # Paper mode stats
-        paper_open = db.query(PaperTrade).filter(
+        # Paper mode stats — SQL aggregation, no .all()
+        paper_open = db.query(func.count(PaperTrade.id)).filter(
             PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
             PaperTrade.execution_mode == 'paper',
-        ).count()
-        paper_closed = db.query(PaperTrade).filter(
+        ).scalar() or 0
+        paper_closed_count = db.query(func.count(PaperTrade.id)).filter(
             PaperTrade.status == 'CLOSED',
             PaperTrade.execution_mode == 'paper',
-        ).all()
-        paper_pnl = sum(t.pnl or 0 for t in paper_closed)
-        paper_wins = sum(1 for t in paper_closed if (t.pnl or 0) > 0)
-        paper_wr = (paper_wins / len(paper_closed) * 100) if paper_closed else 0
+        ).scalar() or 0
+        paper_pnl = db.query(func.sum(PaperTrade.pnl)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == 'paper',
+        ).scalar() or 0
+        paper_wins = db.query(func.count(PaperTrade.id)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == 'paper',
+            PaperTrade.pnl > 0,
+        ).scalar() or 0
+        paper_wr = (paper_wins / paper_closed_count * 100) if paper_closed_count else 0
 
-        # Live mode stats (testnet + mainnet)
-        live_open = db.query(PaperTrade).filter(
+        # Live mode stats (testnet + mainnet) — SQL aggregation
+        live_open = db.query(func.count(PaperTrade.id)).filter(
             PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
             PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
-        ).count()
-        live_closed = db.query(PaperTrade).filter(
+        ).scalar() or 0
+        live_closed_count = db.query(func.count(PaperTrade.id)).filter(
             PaperTrade.status == 'CLOSED',
             PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
-        ).all()
-        live_pnl = sum(t.pnl or 0 for t in live_closed)
-        live_wins = sum(1 for t in live_closed if (t.pnl or 0) > 0)
-        live_wr = (live_wins / len(live_closed) * 100) if live_closed else 0
+        ).scalar() or 0
+        live_pnl = db.query(func.sum(PaperTrade.pnl)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
+        ).scalar() or 0
+        live_wins = db.query(func.count(PaperTrade.id)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
+            PaperTrade.pnl > 0,
+        ).scalar() or 0
+        live_wr = (live_wins / live_closed_count * 100) if live_closed_count else 0
 
     return (
-        f"[PAPER] Open: {paper_open} | Closed: {len(paper_closed)} | WR: {paper_wr:.1f}% | PnL: ${paper_pnl:.2f}\n"
-        f"[LIVE]  Open: {live_open} | Closed: {len(live_closed)} | WR: {live_wr:.1f}% | PnL: ${live_pnl:.2f}"
+        f"[PAPER] Open: {paper_open} | Closed: {paper_closed_count} | WR: {paper_wr:.1f}% | PnL: ${paper_pnl:.2f}\n"
+        f"[LIVE]  Open: {live_open} | Closed: {live_closed_count} | WR: {live_wr:.1f}% | PnL: ${live_pnl:.2f}"
     )
 
 

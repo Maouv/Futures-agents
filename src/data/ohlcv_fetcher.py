@@ -14,6 +14,7 @@ from typing import Optional
 import pandas as pd
 
 from src.data.storage import OHLCVCandle15m, OHLCVCandleH1, OHLCVCandleH4, get_session
+from src.config.settings import settings
 from src.utils.logger import logger
 from src.utils.rate_limiter import binance_limiter
 from src.utils.exchange import get_exchange
@@ -310,8 +311,18 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     logger.info(f"Fetched & stored {len(df)} candles for {symbol} {timeframe}")
 
     # ── Session Filter Flag (FR-1.3) ──────────────────────────────────────
-    # TODO: Re-enable session filter sebelum go live
-    df.attrs['skip_trade'] = False  # Disabled for testing
+    if settings.DISABLE_SESSION_FILTER:
+        df.attrs['skip_trade'] = False
+        logger.debug("Session filter DISABLED by config (DISABLE_SESSION_FILTER=True)")
+    else:
+        now_utc = datetime.now(timezone.utc)
+        skip_trade = not is_trading_session(now_utc)
+        df.attrs['skip_trade'] = skip_trade
+        if skip_trade:
+            logger.info(
+                f"Session Filter: Outside trading hours (UTC {now_utc.strftime('%H:%M')}). "
+                "Data stored but SKIP_TRADE=True."
+            )
 
     return df
 
