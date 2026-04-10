@@ -119,6 +119,7 @@ class TradingBot:
                 logger.info(f"{symbol}: Trend={trend.bias_label} | Signal={reversal.signal} | Confirmed={confirmation.confirmed}")
 
                 # ── 4. LLM Analyst ─────────────────────────────────────────
+                current_price = float(df_15m['close'].iloc[-1])
                 decision = run_analyst(trend, reversal, confirmation, current_price, symbol)
                 logger.info(f"{symbol}: Analyst={decision.action} (confidence: {decision.confidence}) [{decision.source}]")
 

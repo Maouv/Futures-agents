@@ -271,24 +271,31 @@ class UserDataStream:
             trade.pnl = pnl
             trade.close_timestamp = datetime.now(timezone.utc)
 
+            # ── Extract attributes sebelum session close ────────────────────
+            # Mencegah DetachedInstanceError saat akses di luar `with` block
+            trade_id = trade.id
+            trade_pair = trade.pair
+            trade_side = trade.side
+            counter_order_id_copy = counter_order_id
+
         logger.info(
-            f"LIVE TRADE CLOSED | ID: {trade.id} | "
-            f"{trade.pair} {trade.side} | "
+            f"LIVE TRADE CLOSED | ID: {trade_id} | "
+            f"{trade_pair} {trade_side} | "
             f"Reason: {close_reason} | Close: {close_price:.2f} | PnL: ${pnl:.2f}"
         )
 
         # ── Cancel Counter-Order ───────────────────────────────────────────
-        if counter_order_id:
-            self._cancel_counter_order(counter_order_id, trade.pair, close_reason)
+        if counter_order_id_copy:
+            self._cancel_counter_order(counter_order_id_copy, trade_pair, close_reason)
 
         # ── Send Notification ───────────────────────────────────────────────
         if self._notification_callback:
             try:
                 self._notification_callback({
                     'event': 'trade_closed',
-                    'trade_id': trade.id,
-                    'pair': trade.pair,
-                    'side': trade.side,
+                    'trade_id': trade_id,
+                    'pair': trade_pair,
+                    'side': trade_side,
                     'close_reason': close_reason,
                     'close_price': close_price,
                     'pnl': pnl,

@@ -300,9 +300,9 @@ class ExecutionAgent(BaseAgent):
                 .all()
             )
 
-        for trade in pending_trades:
-            result = self._check_single_pending(trade)
-            results.append(result)
+            for trade in pending_trades:
+                result = self._check_single_pending(trade)
+                results.append(result)
 
         return results
 
@@ -407,7 +407,6 @@ class ExecutionAgent(BaseAgent):
                 symbol=trade.pair,
                 type='stop_market',
                 side=close_side,
-                amount=filled_amount,
                 params={
                     'stopPrice': exchange.price_to_precision(trade.pair, trade.sl_price),
                     'closePosition': True,
@@ -421,8 +420,6 @@ class ExecutionAgent(BaseAgent):
                 f"CRITICAL: SL order FAILED for trade {trade.id}! "
                 f"Position is UNPROTECTED. Error: {e}"
             )
-            # TODO: Send Telegram CRITICAL alert
-            # For now, log is enough — WS handler or manual intervention needed
 
         # ── Place TP (take_profit_market) ─────────────────────────────────
         tp_order_id = None
@@ -431,7 +428,6 @@ class ExecutionAgent(BaseAgent):
                 symbol=trade.pair,
                 type='take_profit_market',
                 side=close_side,
-                amount=filled_amount,
                 params={
                     'stopPrice': exchange.price_to_precision(trade.pair, trade.tp_price),
                     'closePosition': True,
