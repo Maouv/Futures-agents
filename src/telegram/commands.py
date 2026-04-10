@@ -155,17 +155,25 @@ def cmd_resume() -> str:
 
 
 def cmd_switch_mode(mode: str = "") -> str:
-    """Switch antara paper, testnet, mainnet (runtime only)."""
+    """Switch antara paper, testnet, mainnet (runtime only).
+
+    NOTE: Mode switch me-reset exchange instance agar API call menggunakan
+    credentials yang benar. WebSocket stream TIDAK di-restart secara otomatis —
+    butuh restart bot untuk menerapkan perubahan WS.
+    """
+    from src.utils.exchange import reset_exchange
     mode = mode.strip().lower()
 
     if mode == "paper":
         settings.EXECUTION_MODE = "paper"
         settings.USE_TESTNET = False
+        reset_exchange()
         return "Mode: PAPER (simulasi lokal). Restart kembali ke .env."
 
     elif mode == "testnet":
         settings.EXECUTION_MODE = "live"
         settings.USE_TESTNET = True
+        reset_exchange()
         return "Mode: TESTNET (Binance Futures Testnet). Restart kembali ke .env."
 
     elif mode == "mainnet":
@@ -173,6 +181,7 @@ def cmd_switch_mode(mode: str = "") -> str:
             return "DITOLAK: CONFIRM_MAINNET=False. Set CONFIRM_MAINNET=True di .env dulu."
         settings.EXECUTION_MODE = "live"
         settings.USE_TESTNET = False
+        reset_exchange()
         return "Mode: MAINNET (Binance Futures Production — UANG ASLI). Restart kembali ke .env."
 
     else:

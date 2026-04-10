@@ -64,14 +64,14 @@ def _get_trade_context() -> str:
         paper_wins = sum(1 for t in paper_closed if (t.pnl or 0) > 0)
         paper_wr = (paper_wins / len(paper_closed) * 100) if paper_closed else 0
 
-        # Live mode stats
+        # Live mode stats (testnet + mainnet)
         live_open = db.query(PaperTrade).filter(
             PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-            PaperTrade.execution_mode == 'live',
+            PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
         ).count()
         live_closed = db.query(PaperTrade).filter(
             PaperTrade.status == 'CLOSED',
-            PaperTrade.execution_mode == 'live',
+            PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
         ).all()
         live_pnl = sum(t.pnl or 0 for t in live_closed)
         live_wins = sum(1 for t in live_closed if (t.pnl or 0) > 0)

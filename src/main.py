@@ -128,16 +128,6 @@ class TradingBot:
 
                 # ── 5. Risk & Execution ────────────────────────────────────
                 if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
-                    # Max 1 open trade per pair (OPEN atau PENDING_ENTRY)
-                    with get_session() as db:
-                        existing = db.query(PaperTrade).filter(
-                            PaperTrade.pair == symbol,
-                            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-                        ).count()
-                    if existing > 0:
-                        logger.info(f"{symbol}: Already has {existing} open/pending trade. Skipping.")
-                        continue
-
                     if reversal.ob is not None:
                         risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
                         result = self._execution_agent.run(
@@ -287,7 +277,7 @@ class TradingBot:
             with get_session() as db:
                 open_trades = db.query(PaperTrade).filter(
                     PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-                    PaperTrade.execution_mode == 'live',
+                    PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
                 ).all()
 
                 for trade in open_trades:

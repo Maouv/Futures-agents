@@ -279,9 +279,13 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
         )
         existing_timestamps = {t[0] for t in existing}
 
-        # Filter hanya candle baru (strip timezone dari DataFrame juga)
-        df['_ts_naive'] = df['timestamp'].apply(lambda ts: ts.to_pydatetime().replace(tzinfo=None))
-        new_candles_df = df[~df['_ts_naive'].isin(existing_timestamps)]
+        # Filter hanya candle baru — tanpa modify DataFrame (no _ts_naive column leak)
+        naive_timestamps = [
+            ts.to_pydatetime().replace(tzinfo=None)
+            for ts in df["timestamp"]
+        ]
+        mask = [ts not in existing_timestamps for ts in naive_timestamps]
+        new_candles_df = df[mask]
 
         if not new_candles_df.empty:
             # OPTIMIZED: Bulk insert dengan dict mappings
@@ -302,10 +306,6 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
             logger.debug(f"Inserted {len(new_candles)} new candles for {symbol} {timeframe}")
         else:
             logger.debug(f"No new candles to insert for {symbol} {timeframe}")
-
-        # Cleanup kolom helper
-        if '_ts_naive' in df.columns:
-            df.drop(columns=['_ts_naive'], inplace=True)
 
     logger.info(f"Fetched & stored {len(df)} candles for {symbol} {timeframe}")
 
