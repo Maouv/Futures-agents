@@ -24,7 +24,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Deteksi command vs chat
     is_command = message.startswith('/') or any(
         kw in message.lower()
-        for kw in ['status', 'trades', 'history', 'performance', 'pause', 'resume']
+        for kw in ['status', 'trades', 'history', 'performance', 'kill', 'resume', 'mode', 'menu']
     )
 
     if is_command:
@@ -43,6 +43,10 @@ async def _execute_command(result) -> str:
     from src.telegram.commands import COMMAND_HANDLERS
     handler = COMMAND_HANDLERS.get(result.function_name)
     if handler:
+        # Hanya pass 'mode' param yang dikenali oleh get_performance dan get_trade_history
+        mode = result.params.get('mode', '')
+        if mode:
+            return handler(mode)
         return handler()
     return f"❓ Perintah tidak dikenali: {result.original_message}"
 

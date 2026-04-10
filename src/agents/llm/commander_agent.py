@@ -18,15 +18,17 @@ class CommanderResult(BaseModel):
 
 
 # Daftar fungsi yang diizinkan — JANGAN tambah tanpa review
+# HARUS sync dengan COMMAND_HANDLERS di src/telegram/commands.py
 ALLOWED_FUNCTIONS = [
-    'get_status',           # Lihat status bot
-    'get_open_trades',      # Lihat paper trades yang open
-    'get_trade_history',    # Lihat history trades
-    'get_performance',      # Lihat performa (win rate, PnL)
-    'pause_trading',        # Pause bot sementara
-    'resume_trading',       # Resume bot
-    'close_all_trades',     # Close semua paper trades
-    'unknown',              # Perintah tidak dikenali
+    'get_status',               # Lihat status bot
+    'get_open_trades',          # Lihat trades yang open
+    'get_trade_history',        # Lihat history trades
+    'get_performance',          # Lihat performa (win rate, PnL)
+    'activate_kill_switch',     # Kill switch ON
+    'deactivate_kill_switch',   # Kill switch OFF (resume)
+    'show_menu',                # Tampilkan menu
+    'switch_mode',              # Switch paper/testnet/mainnet
+    'unknown',                  # Perintah tidak dikenali
 ]
 
 

@@ -92,6 +92,7 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
 
                 # Update trade
                 trade.status = 'CLOSED'
+                trade.close_price = close_price
                 trade.pnl = pnl
                 trade.close_reason = close_reason
                 trade.close_timestamp = datetime.now(timezone.utc)

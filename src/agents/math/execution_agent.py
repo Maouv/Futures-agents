@@ -287,16 +287,26 @@ class ExecutionAgent(BaseAgent):
         """
         Cek semua PENDING_ENTRY trades — apakah sudah FILLED atau EXPIRED.
         Dipanggil setiap cycle oleh main loop.
+        Hanya berjalan di live mode — paper mode tidak punya Binance orders.
 
         Returns:
             List of dict dengan info aksi yang diambil per trade.
         """
         results = []
 
+        # Paper mode tidak punya pending Binance orders
+        if settings.EXECUTION_MODE != "live":
+            return results
+
+        mode = self._current_mode()
+
         with get_session() as db:
             pending_trades = (
                 db.query(PaperTrade)
-                .filter(PaperTrade.status == 'PENDING_ENTRY')
+                .filter(
+                    PaperTrade.status == 'PENDING_ENTRY',
+                    PaperTrade.execution_mode == mode,
+                )
                 .all()
             )
 
@@ -486,13 +496,15 @@ class ExecutionAgent(BaseAgent):
                 raise
 
     def _count_open_positions(self, symbol: str) -> int:
-        """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY)."""
+        """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY), filtered by current mode."""
+        mode = self._current_mode()
         with get_session() as db:
             count = (
                 db.query(PaperTrade)
                 .filter(
                     PaperTrade.pair == symbol,
                     PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+                    PaperTrade.execution_mode == mode,
                 )
                 .count()
             )

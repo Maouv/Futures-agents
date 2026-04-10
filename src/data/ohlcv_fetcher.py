@@ -145,9 +145,9 @@ def detect_gap_in_batch(df: pd.DataFrame, timeframe: str) -> bool:
     expected_seconds = _timeframe_to_seconds(timeframe)
     gap_threshold = GAP_MULTIPLIER * expected_seconds
 
-    # Hitung selisih waktu antar candle
-    df['time_diff'] = df['timestamp'].diff().dt.total_seconds()
-    max_gap = df['time_diff'].max()
+    # Hitung selisih waktu antar candle (tanpa mutasi DataFrame)
+    time_diff = df['timestamp'].diff().dt.total_seconds()
+    max_gap = time_diff.max()
 
     if max_gap > gap_threshold:
         logger.error(

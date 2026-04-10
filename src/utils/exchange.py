@@ -63,8 +63,8 @@ def _create_exchange() -> ccxt.binanceusdm:
     else:
         config = {
             **base_config,
-            "apiKey": settings.BINANCE_API_KEY.get_secret_value(),
-            "secret": settings.BINANCE_API_SECRET.get_secret_value(),
+            "apiKey": settings.BINANCE_API_KEY.get_secret_value() if settings.BINANCE_API_KEY else "",
+            "secret": settings.BINANCE_API_SECRET.get_secret_value() if settings.BINANCE_API_SECRET else "",
         }
         exchange = ccxt.binanceusdm(config)
         logger.debug("Exchange: Binance Futures PRODUCTION")
