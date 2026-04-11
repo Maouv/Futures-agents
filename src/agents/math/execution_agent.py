@@ -24,7 +24,7 @@ from src.data.storage import PaperTrade, get_session
 from src.agents.math.risk_agent import RiskResult
 from src.agents.math.reversal_agent import ReversalResult
 from src.agents.math.trend_agent import TrendResult
-from src.utils.exchange import get_exchange, reset_exchange
+from src.utils.exchange import get_exchange, reset_exchange, place_algo_order
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
 
@@ -349,7 +349,7 @@ class ExecutionAgent(BaseAgent):
             order = exchange.fetch_order(trade_exchange_order_id, trade_pair)
             order_status = order.get('status', 'unknown')
 
-            if order_status == 'filled':
+            if order_status in ('filled', 'closed'):
                 result = self._handle_fill(trade, order, exchange)
 
             elif order_status == 'canceled' or order_status == 'expired':
@@ -366,7 +366,11 @@ class ExecutionAgent(BaseAgent):
 
             elif order_status == 'open':
                 # Masih menunggu — cek kadaluarsa
-                hours_elapsed = (datetime.now(timezone.utc) - trade['entry_timestamp']).total_seconds() / 3600
+                entry_ts = trade['entry_timestamp']
+                # Handle naive datetime dari SQLite
+                if entry_ts.tzinfo is None:
+                    entry_ts = entry_ts.replace(tzinfo=timezone.utc)
+                hours_elapsed = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 3600
                 candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
                 candles_remaining = settings.ORDER_EXPIRY_CANDLES - candles_elapsed
 
@@ -438,22 +442,22 @@ class ExecutionAgent(BaseAgent):
 
         close_side = 'sell' if trade_side == 'LONG' else 'buy'
 
-        # ── Place SL (stop_market) with retry ──────────────────────────────
+        # ── Place SL (stop_market) via Algo API with retry ───────────────────
+        # Sejak Des 2025, Binance migrasi conditional orders ke Algo Order API.
+        # Endpoint: POST /fapi/v1/algoOrder (algoType=CONDITIONAL, type=STOP_MARKET)
         sl_order_id = None
         for attempt in range(1, SL_MAX_RETRIES + 1):
             try:
-                sl_order = exchange.create_order(
+                sl_result = place_algo_order(
                     symbol=trade_pair,
-                    type='stop_market',
                     side=close_side,
-                    params={
-                        'stopPrice': exchange.price_to_precision(trade_pair, trade_sl_price),
-                        'closePosition': True,
-                        'reduceOnly': True,
-                    }
+                    order_type='STOP_MARKET',
+                    trigger_price=trade_sl_price,
+                    quantity=filled_amount,
+                    reduce_only=True,
                 )
-                sl_order_id = str(sl_order['id'])
-                self._log(f"SL order placed | ID: {sl_order_id} | Stop: {trade_sl_price:.2f}")
+                sl_order_id = str(sl_result.get('algoId', ''))
+                self._log(f"SL algo order placed | ID: {sl_order_id} | Trigger: {trade_sl_price:.2f}")
                 break
             except Exception as e:
                 self._log_error(
@@ -512,24 +516,22 @@ class ExecutionAgent(BaseAgent):
             result["action"] = "emergency_closed"
             return result
 
-        # ── Place TP (take_profit_market) ─────────────────────────────────
+        # ── Place TP (take_profit_market) via Algo API ─────────────────────
         tp_order_id = None
         try:
-            tp_order = exchange.create_order(
+            tp_result = place_algo_order(
                 symbol=trade_pair,
-                type='take_profit_market',
                 side=close_side,
-                params={
-                    'stopPrice': exchange.price_to_precision(trade_pair, trade_tp_price),
-                    'closePosition': True,
-                    'reduceOnly': True,
-                }
+                order_type='TAKE_PROFIT_MARKET',
+                trigger_price=trade_tp_price,
+                quantity=filled_amount,
+                reduce_only=True,
             )
-            tp_order_id = str(tp_order['id'])
-            self._log(f"TP order placed | ID: {tp_order_id} | Stop: {trade_tp_price:.2f}")
+            tp_order_id = str(tp_result.get('algoId', ''))
+            self._log(f"TP algo order placed | ID: {tp_order_id} | Trigger: {trade_tp_price:.2f}")
         except Exception as e:
             self._log_error(
-                f"ERROR: TP order FAILED for trade {trade_id}. "
+                f"ERROR: TP algo order FAILED for trade {trade_id}. "
                 f"SL still protects capital. Error: {e}"
             )
 

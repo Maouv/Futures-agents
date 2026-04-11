@@ -113,6 +113,141 @@ def reset_exchange() -> None:
     logger.info("Exchange instance reset. New instance will be created on next get_exchange().")
 
 
+def place_algo_order(
+    symbol: str,
+    side: str,
+    order_type: str,
+    trigger_price: float,
+    quantity: float,
+    reduce_only: bool = True,
+) -> dict:
+    """
+    Place conditional order (SL/TP) via Binance Algo Order API.
+
+    Sejak Des 2025, Binance memigrasikan STOP_MARKET, TAKE_PROFIT_MARKET, dll
+    dari endpoint lama (/fapi/v1/order) ke Algo Order API (/fapi/v1/algoOrder).
+    ccxt belum support endpoint ini secara native, jadi kita panggil langsung.
+
+    Args:
+        symbol: Trading pair, e.g. 'BTCUSDT'
+        side: 'BUY' atau 'SELL'
+        order_type: 'STOP_MARKET' atau 'TAKE_PROFIT_MARKET'
+        trigger_price: Harga trigger (sebelumnya 'stopPrice')
+        quantity: Jumlah kontrak
+        reduce_only: True untuk reduce-only (SL/TP selalu reduce)
+
+    Returns:
+        dict response dari Binance API (berisi 'algoId')
+
+    Raises:
+        ccxt.ExchangeError: Jika order gagal
+    """
+    import time
+    import hashlib
+    import hmac
+    import urllib.parse
+
+    exchange = get_exchange()
+
+    params = {
+        'symbol': symbol,
+        'side': side.upper(),
+        'algoType': 'CONDITIONAL',
+        'type': order_type,
+        'triggerPrice': exchange.price_to_precision(symbol, trigger_price),
+        'quantity': exchange.amount_to_precision(symbol, quantity),
+        'workingType': 'MARK_PRICE',
+        'reduceOnly': 'true' if reduce_only else 'false',
+        'timestamp': int(time.time() * 1000),
+    }
+
+    # Build query string + HMAC signature (Binance auth)
+    query = urllib.parse.urlencode(params)
+    signature = hmac.new(
+        exchange.secret.encode(),
+        query.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    query += f'&signature={signature}'
+
+    # Determine base URL (testnet vs mainnet)
+    if settings.USE_TESTNET:
+        base_url = 'https://testnet.binancefuture.com'
+    else:
+        base_url = 'https://fapi.binance.com'
+
+    url = f'{base_url}/fapi/v1/algoOrder?{query}'
+
+    import requests as http_requests
+    headers = {'X-MBX-APIKEY': exchange.apiKey}
+    response = http_requests.post(url, headers=headers, timeout=10)
+
+    result = response.json()
+    if response.status_code != 200 or 'code' in result:
+        raise ccxt.ExchangeError(
+            f"Algo order failed: {result.get('msg', str(result))}"
+        )
+
+    logger.debug(f"Algo order placed: {order_type} {side} {symbol} trigger={trigger_price}")
+    return result
+
+
+def cancel_algo_order(
+    algo_order_id: str,
+    symbol: str,
+) -> dict:
+    """
+    Cancel conditional order via Binance Algo Order API.
+
+    Args:
+        algo_order_id: ID dari algo order yang akan di-cancel
+        symbol: Trading pair, e.g. 'BTCUSDT'
+
+    Returns:
+        dict response dari Binance API
+    """
+    import time
+    import hashlib
+    import hmac
+    import urllib.parse
+
+    exchange = get_exchange()
+
+    params = {
+        'algoId': algo_order_id,
+        'symbol': symbol,
+        'timestamp': int(time.time() * 1000),
+    }
+
+    query = urllib.parse.urlencode(params)
+    signature = hmac.new(
+        exchange.secret.encode(),
+        query.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    query += f'&signature={signature}'
+
+    if settings.USE_TESTNET:
+        base_url = 'https://testnet.binancefuture.com'
+    else:
+        base_url = 'https://fapi.binance.com'
+
+    url = f'{base_url}/fapi/v1/algoOrder?{query}'
+
+    import requests as http_requests
+    headers = {'X-MBX-APIKEY': exchange.apiKey}
+    response = http_requests.delete(url, headers=headers, timeout=10)
+
+    result = response.json()
+    if response.status_code != 200 or 'code' in result:
+        raise ccxt.ExchangeError(
+            f"Cancel algo order failed: {result.get('msg', str(result))}"
+        )
+
+    logger.debug(f"Algo order cancelled: {algo_order_id}")
+    return result
+
+
 def get_ws_base_url() -> str:
     """
     Return WebSocket base URL berdasarkan settings.USE_TESTNET.
