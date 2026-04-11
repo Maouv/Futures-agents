@@ -239,7 +239,7 @@ def cancel_algo_order(
     response = http_requests.delete(url, headers=headers, timeout=10)
 
     result = response.json()
-    if response.status_code != 200 or 'code' in result:
+    if response.status_code != 200 or ('code' in result and result.get('code') != 200):
         raise ccxt.ExchangeError(
             f"Cancel algo order failed: {result.get('msg', str(result))}"
         )
