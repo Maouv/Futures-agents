@@ -1,5 +1,11 @@
 """
 risk_agent.py — Kalkulasi risk management (SL, TP, position size).
+
+OB Midpoint Overlap Handling:
+- Jika harga sudah melewati OB midpoint tapi MASIH di dalam OB zone
+  → adjust entry ke current_price, recalculate SL/TP dari current_price
+- Jika harga sudah di LUAR OB zone → raise OverlapSkipError (trade di-skip)
+- Minimum SL buffer = 0.5 * ATR agar SL tidak terlalu dekat
 """
 import pandas as pd
 from pydantic import BaseModel
@@ -9,6 +15,11 @@ from src.agents.math.base_agent import BaseAgent
 from src.config.settings import settings
 from src.indicators.helpers import calculate_atr
 from src.indicators.luxalgo_smc import OrderBlock
+
+
+class OverlapSkipError(ValueError):
+    """Harga sudah di luar OB zone — trade harus di-skip."""
+    pass
 
 
 class RiskResult(BaseModel):
@@ -22,6 +33,7 @@ class RiskResult(BaseModel):
     rr_ratio: float         # Actual RR
     leverage: int
     margin_required: float  # Modal yang dibutuhkan
+    entry_adjusted: bool = False  # True jika entry di-adjust dari midpoint ke current price
 
 
 class RiskAgent(BaseAgent):
@@ -30,6 +42,12 @@ class RiskAgent(BaseAgent):
 
     Input: signal, OrderBlock, DataFrame untuk ATR
     Output: RiskResult
+
+    OB Midpoint Overlap Logic:
+        - Midpoint = ideal entry (OB high+low / 2)
+        - Jika current_price melewati midpoint tapi masih di dalam OB zone
+          → adjust entry ke current_price, SL tetap di OB boundary - ATR
+        - Jika current_price sudah di luar OB zone → raise OverlapSkipError
     """
 
     def run(
@@ -37,6 +55,7 @@ class RiskAgent(BaseAgent):
         signal: str,
         order_block: OrderBlock,
         df: pd.DataFrame,
+        current_price: Optional[float] = None,
         atr_period: int = 14
     ) -> RiskResult:
         """
@@ -46,10 +65,15 @@ class RiskAgent(BaseAgent):
             signal: 'LONG' atau 'SHORT'
             order_block: OrderBlock yang relevan
             df: DataFrame untuk kalkulasi ATR
+            current_price: Harga terbaru (close 15m). Jika None, pakai OB midpoint.
             atr_period: Period untuk ATR
 
         Returns:
             RiskResult dengan SL, TP, dan position size
+
+        Raises:
+            OverlapSkipError: Jika harga sudah di luar OB zone (trade harus di-skip)
+            ValueError: Jika input tidak valid atau risk distance terlalu kecil
         """
         if signal not in ["LONG", "SHORT"]:
             raise ValueError(f"Signal harus 'LONG' atau 'SHORT', dapat: {signal}")
@@ -61,20 +85,77 @@ class RiskAgent(BaseAgent):
         atr_series = calculate_atr(df, period=atr_period)
         atr = atr_series.iloc[-1]
 
-        # Entry price = OB midpoint
-        entry_price = (order_block.high + order_block.low) / 2
+        # OB boundaries
+        ob_midpoint = (order_block.high + order_block.low) / 2
+        ob_high = order_block.high
+        ob_low = order_block.low
+
+        # ── OB Midpoint Overlap Check ────────────────────────────────────
+        entry_price = ob_midpoint
+        entry_adjusted = False
+
+        if current_price is not None:
+            if signal == "LONG":
+                # LONG: ideal entry di midpoint, harga harus di atas OB low
+                # Jika harga sudah di bawah OB low → di luar OB zone, SKIP
+                if current_price < ob_low:
+                    raise OverlapSkipError(
+                        f"LONG: harga {current_price:.2f} sudah di bawah OB low {ob_low:.2f} — edge hilang"
+                    )
+                # Jika harga sudah melewati midpoint (turun menuju OB tapi sudah rebound melewati mid)
+                # ATAU harga di antara OB low dan midpoint → masih OK, adjust
+                if current_price != ob_midpoint:
+                    # Cek apakah harga sudah melewati midpoint ke arah yang不利
+                    # LONG: harga sudah naik melewati midpoint → adjust
+                    if current_price > ob_midpoint:
+                        entry_price = current_price
+                        entry_adjusted = True
+                        self._log(
+                            f"OB OVERLAP: LONG entry adjusted dari midpoint {ob_midpoint:.2f} "
+                            f"ke current_price {current_price:.2f}"
+                        )
+
+            elif signal == "SHORT":
+                # SHORT: ideal entry di midpoint, harga harus di bawah OB high
+                # Jika harga sudah di atas OB high → di luar OB zone, SKIP
+                if current_price > ob_high:
+                    raise OverlapSkipError(
+                        f"SHORT: harga {current_price:.2f} sudah di atas OB high {ob_high:.2f} — edge hilang"
+                    )
+                # SHORT: harga sudah turun melewati midpoint → adjust
+                if current_price < ob_midpoint:
+                    entry_price = current_price
+                    entry_adjusted = True
+                    self._log(
+                        f"OB OVERLAP: SHORT entry adjusted dari midpoint {ob_midpoint:.2f} "
+                        f"ke current_price {current_price:.2f}"
+                    )
 
         # Calculate SL based on signal direction
+        # SL selalu dihitung dari OB boundary (bukan entry) untuk menjaga consistency
         if signal == "LONG":
-            sl_price = order_block.low - (atr * 1.0)
+            sl_price = ob_low - (atr * 1.0)
         else:  # SHORT
-            sl_price = order_block.high + (atr * 1.0)
+            sl_price = ob_high + (atr * 1.0)
+
+        # Minimum SL buffer: pastikan SL tidak terlalu dekat dengan entry
+        min_sl_distance = atr * 0.5
+        if signal == "LONG" and (entry_price - sl_price) < min_sl_distance:
+            sl_price = entry_price - min_sl_distance
+            self._log(
+                f"SL buffer diperkecil: SL dipindah ke {sl_price:.2f} (min distance {min_sl_distance:.2f})"
+            )
+        elif signal == "SHORT" and (sl_price - entry_price) < min_sl_distance:
+            sl_price = entry_price + min_sl_distance
+            self._log(
+                f"SL buffer diperkecil: SL dipindah ke {sl_price:.2f} (min distance {min_sl_distance:.2f})"
+            )
 
         # Calculate risk distance
         risk_distance = abs(entry_price - sl_price)
 
         # Validate risk distance
-        if risk_distance == 0 or risk_distance < (atr * 0.5 ):
+        if risk_distance == 0 or risk_distance < (atr * 0.3):
             raise ValueError(f"Risk distance terlalu kecil atau nol: {risk_distance}")
 
         # Calculate TP based on Risk:Reward ratio from settings
@@ -102,6 +183,7 @@ class RiskAgent(BaseAgent):
             f"SL: {sl_price:.2f} | TP: {tp_price:.2f} | "
             f"Risk: ${risk_usd:.2f} | Reward: ${reward_usd:.2f} | "
             f"Size: {position_size:.4f} | Leverage: {leverage}x"
+            f"{' [ADJUSTED]' if entry_adjusted else ''}"
         )
 
         return RiskResult(
@@ -113,5 +195,6 @@ class RiskAgent(BaseAgent):
             reward_usd=reward_usd,
             rr_ratio=rr_ratio,
             leverage=leverage,
-            margin_required=margin_required
+            margin_required=margin_required,
+            entry_adjusted=entry_adjusted
         )

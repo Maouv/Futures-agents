@@ -196,8 +196,12 @@ class ExecutionAgent(BaseAgent):
         reversal_result: ReversalResult
     ) -> ExecutionResult:
         """
-        Live mode: Place LIMIT order di OB midpoint, store PENDING_ENTRY di DB.
-        SL/TP dipasang SETELAH limit order FILL (di check_pending_orders).
+        Live mode: Place order dan store di DB.
+
+        Jika entry_adjusted (harga sudah lewat midpoint):
+          → Market order (langsung fill) + langsung pasang SL/TP
+        Jika entry di midpoint (normal):
+          → Limit order + PENDING_ENTRY, SL/TP setelah fill
         """
         exchange = get_exchange()
 
@@ -217,7 +221,44 @@ class ExecutionAgent(BaseAgent):
                 )
                 return ExecutionResult(action="SKIP", reason="Insufficient margin")
 
-            # ── Place LIMIT Order at OB Midpoint ──────────────────────────
+            # ── Determine Order Type ────────────────────────────────────────
+            # Jika entry di-adjust (harga sudah lewat midpoint), pakai market order
+            # karena limit di current_price akan langsung trigger anyway
+            if risk_result.entry_adjusted:
+                return self._execute_live_market(symbol, risk_result, reversal_result, exchange)
+
+            # ── Place LIMIT Order at OB Midpoint (normal path) ────────────
+            return self._execute_live_limit(symbol, risk_result, reversal_result, exchange)
+
+        except ccxt.InsufficientFunds as e:
+            self._log_error(f"Insufficient funds: {e}")
+            return ExecutionResult(action="SKIP", reason="Insufficient funds")
+        except ccxt.InvalidOrder as e:
+            self._log_error(f"Invalid order: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
+        except ccxt.NetworkError as e:
+            self._log_error(f"Network error: {e}")
+            reset_exchange()
+            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
+        except ccxt.ExchangeError as e:
+            self._log_error(f"Exchange error: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
+        except Exception as e:
+            self._log_error(f"Unexpected error in live execution: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+
+    def _execute_live_limit(
+        self,
+        symbol: str,
+        risk_result: RiskResult,
+        reversal_result: ReversalResult,
+        exchange
+    ) -> ExecutionResult:
+        """
+        Live mode (normal path): Place LIMIT order di OB midpoint, store PENDING_ENTRY di DB.
+        SL/TP dipasang SETELAH limit order FILL (di check_pending_orders).
+        """
+        try:
             entry_price = risk_result.entry_price
             side = 'buy' if reversal_result.signal == "LONG" else 'sell'
             amount = exchange.amount_to_precision(symbol, risk_result.position_size)
@@ -235,7 +276,7 @@ class ExecutionAgent(BaseAgent):
                 amount=float(amount),
                 price=float(price),
                 params={
-                    'timeInForce': 'GTC',  # Good Till Cancelled — kita cancel manual saat kadaluarsa
+                    'timeInForce': 'GTC',
                 }
             )
 
@@ -285,7 +326,142 @@ class ExecutionAgent(BaseAgent):
             self._log_error(f"Exchange error: {e}")
             return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
         except Exception as e:
-            self._log_error(f"Unexpected error in live execution: {e}")
+            self._log_error(f"Unexpected error in live limit execution: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+
+    def _execute_live_market(
+        self,
+        symbol: str,
+        risk_result: RiskResult,
+        reversal_result: ReversalResult,
+        exchange
+    ) -> ExecutionResult:
+        """
+        Live mode (overlap path): Place MARKET order karena harga sudah lewat midpoint.
+        Langsung pasang SL/TP setelah fill — tidak perlu PENDING_ENTRY.
+        """
+        try:
+            side = 'buy' if reversal_result.signal == "LONG" else 'sell'
+            amount = exchange.amount_to_precision(symbol, risk_result.position_size)
+
+            self._log(
+                f"Placing MARKET {side.upper()} | {symbol} | "
+                f"Amount: {amount} | Reason: OB midpoint overlap"
+            )
+
+            order = exchange.create_order(
+                symbol=symbol,
+                type='market',
+                side=side,
+                amount=float(amount),
+                params={'reduceOnly': False}
+            )
+
+            filled_price = float(order.get('average', order.get('price', risk_result.entry_price)))
+            filled_amount = float(order.get('filled', risk_result.position_size))
+            exchange_order_id = str(order.get('id', ''))
+
+            self._log(
+                f"MARKET order filled | ID: {exchange_order_id} | "
+                f"{symbol} {side.upper()} @ ~{filled_price:.2f}"
+            )
+
+            # ── Place SL + TP Algo Orders ──────────────────────────────────
+            close_side = 'sell' if reversal_result.signal == "LONG" else 'buy'
+            sl_order_id = None
+            tp_order_id = None
+
+            # SL with retry
+            for attempt in range(1, SL_MAX_RETRIES + 1):
+                try:
+                    sl_result = place_algo_order(
+                        symbol=symbol,
+                        side=close_side,
+                        order_type='STOP_MARKET',
+                        trigger_price=risk_result.sl_price,
+                        quantity=filled_amount,
+                        reduce_only=True,
+                    )
+                    sl_order_id = str(sl_result.get('algoId', ''))
+                    self._log(f"SL algo placed | ID: {sl_order_id} | Trigger: {risk_result.sl_price:.2f}")
+                    break
+                except Exception as e:
+                    self._log_error(
+                        f"SL attempt {attempt}/{SL_MAX_RETRIES} FAILED: {e}"
+                    )
+                    if attempt < SL_MAX_RETRIES:
+                        backoff = SL_RETRY_BACKOFF_BASE ** attempt
+                        time.sleep(backoff)
+
+            # TP
+            try:
+                tp_result = place_algo_order(
+                    symbol=symbol,
+                    side=close_side,
+                    order_type='TAKE_PROFIT_MARKET',
+                    trigger_price=risk_result.tp_price,
+                    quantity=filled_amount,
+                    reduce_only=True,
+                )
+                tp_order_id = str(tp_result.get('algoId', ''))
+                self._log(f"TP algo placed | ID: {tp_order_id} | Trigger: {risk_result.tp_price:.2f}")
+            except Exception as e:
+                self._log_error(f"TP algo FAILED: {e}. SL still protects capital.")
+
+            # ── Store OPEN di DB ───────────────────────────────────────────
+            with get_session() as db:
+                trade = PaperTrade(
+                    pair=symbol,
+                    side=reversal_result.signal,
+                    entry_price=filled_price,
+                    sl_price=risk_result.sl_price,
+                    tp_price=risk_result.tp_price,
+                    size=filled_amount,
+                    leverage=risk_result.leverage,
+                    status='OPEN',
+                    entry_timestamp=datetime.now(timezone.utc),
+                    execution_mode=self._current_mode(),
+                    exchange_order_id=exchange_order_id,
+                    sl_order_id=sl_order_id,
+                    tp_order_id=tp_order_id,
+                )
+                db.add(trade)
+                db.flush()
+                trade_id = trade.id
+
+            sl_status = "OK" if sl_order_id else "FAILED"
+            tp_status = "OK" if tp_order_id else "FAILED"
+
+            self._log(
+                f"LIVE TRADE OPENED (overlap) | ID: {trade_id} | "
+                f"{symbol} {reversal_result.signal} | "
+                f"Entry: {filled_price:.2f} | "
+                f"SL: {risk_result.sl_price:.2f} ({sl_status}) | "
+                f"TP: {risk_result.tp_price:.2f} ({tp_status}) | "
+                f"SL_Order: {sl_order_id} | TP_Order: {tp_order_id}"
+            )
+
+            return ExecutionResult(
+                action="OPEN",
+                reason=f"Market order filled (overlap). SL: {sl_status}, TP: {tp_status}",
+                trade_id=trade_id
+            )
+
+        except ccxt.InsufficientFunds as e:
+            self._log_error(f"Insufficient funds: {e}")
+            return ExecutionResult(action="SKIP", reason="Insufficient funds")
+        except ccxt.InvalidOrder as e:
+            self._log_error(f"Invalid order: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
+        except ccxt.NetworkError as e:
+            self._log_error(f"Network error: {e}")
+            reset_exchange()
+            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
+        except ccxt.ExchangeError as e:
+            self._log_error(f"Exchange error: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
+        except Exception as e:
+            self._log_error(f"Unexpected error in live market execution: {e}")
             return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
 
     def check_pending_orders(self) -> list:

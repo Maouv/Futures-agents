@@ -23,10 +23,10 @@ src/agents/math/                  → Pure Python — DILARANG panggil LLM di si
   reversal_agent.py               → H1 SMC (OB+FVG) → ReversalResult
   confirmation_agent.py           → 15m validation → ConfirmationResult
   risk_agent.py                   → ATR SL/TP + fixed USD sizing → RiskResult
-  execution_agent.py              → Paper: INSERT DB | Live: Limit + Algo SL/TP
+  execution_agent.py              → Paper: INSERT DB | Live: Limit + Algo SL/TP → ExecutionResult
   sltp_manager.py                 → Paper mode SL/TP check (high/low candle)
 src/agents/llm/
-  analyst_agent.py                → Cerebras Qwen-3, fallback rule-based jika API down
+  analyst_agent.py                → Cerebras Qwen-3, fallback rule-based jika API down → AnalystDecision
   commander_agent.py              → Groq Llama-3.1 — Telegram command parser
   concierge_agent.py              → Groq Llama-3.1 — chat mode, concurrency locked
 src/indicators/
@@ -49,6 +49,34 @@ src/utils/
   rate_limiter.py                 → Sliding window 800 req/min
   kill_switch.py                  → Emergency stop
   logger.py                       → Loguru setup
+```
+
+## Result Models (Pydantic)
+
+Setiap agent return model ini — jangan ngarang field lain:
+
+```python
+TrendResult:       bias: int (-1/0/1), bias_label: str, confidence: float, reason: str
+ReversalResult:    signal: str (LONG/SHORT/NONE), confidence: int, ob, fvg, bos_choch, entry_price, reason
+ConfirmationResult: confirmed: bool, reason: str, fvg_confluence: bool, bos_alignment: bool
+RiskResult:        entry_price, sl_price, tp_price, position_size, risk_usd, reward_usd, rr_ratio, leverage, margin_required, entry_adjusted
+ExecutionResult:   action: str (OPEN/SKIP/PENDING), reason: str, trade_id: Optional[int]
+AnalystDecision:   action: str (LONG/SHORT/SKIP), confidence: int, reasoning: str, source: str (llm/rule_based)
+```
+
+## Algo Order Flow (exchange.py)
+
+```
+PLACE:  place_algo_order(symbol, side, order_type, trigger_price, qty)
+        → POST /fapi/v1/algoOrder, algoType=CONDITIONAL, param=triggerPrice (BUKAN stopPrice)
+        → returns dict dengan key 'algoId' (BUKAN 'orderId')
+
+CANCEL: cancel_algo_order(algoId, symbol)
+        → DELETE /fapi/v1/algoOrder
+        → BUKAN exchange.cancel_order() — endpoint lama tidak bisa cancel algo
+
+WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId BARU (bukan algoId)
+        → Fallback match: cari by symbol + side jika algoId tidak cocok
 ```
 
 ## Cara Kerja
@@ -91,38 +119,46 @@ src/utils/
 - **DetachedInstanceError**: Akses atribut PaperTrade di luar session scope akan crash. Ambil semua nilai yang dibutuhkan sebelum session close
 - **Mode switch**: Kalau ganti `EXECUTION_MODE` tanpa restart, exchange instance masih pakai config lama. WAJIB restart
 - **`current_price` undefined**: Di beberapa path, `current_price` belum di-assign sebelum dipakai. Pastikan selalu ada fallback
-- **Binance -4137**: Error ini = buy price above trigger price untuk stop orders. Artinya stop sudah ke-trigger, skip order
-- **Binance -4120 STOP_ORDER_SWITCH_ALGO**: Sejak Des 2025, `STOP_MARKET`/`TAKE_PROFIT_MARKET` TIDAK BISA lewat `POST /fapi/v1/order`. WAJIB pakai `POST /fapi/v1/algoOrder` dengan `algoType=CONDITIONAL`, param `triggerPrice` (bukan `stopPrice`), response key `algoId` (bukan `orderId`)
-- **Order status `closed`**: Binance bisa return `closed` selain `filled` untuk order yang sudah tereksekusi. Kedua-duanya harus ditangani
+- **Binance error codes**:
+  | Code | Penyebab | Handling |
+  |------|----------|----------|
+  | -4137 | Stop sudah ter-trigger (buy price above trigger) | Skip order |
+  | -4120 | Pakai `/fapi/v1/order` untuk algo order | Pakai `/fapi/v1/algoOrder` |
+- **Order status `closed`**: Binance bisa return `closed` selain `filled`. Kedua-duanya = tereksekusi
 - **Naive datetime di SQLite**: `PaperTrade.entry_timestamp` dari DB tidak punya timezone. Harus `.replace(tzinfo=timezone.utc)` sebelum dikurangi `datetime.now(timezone.utc)`
-- **ccxt version**: Pakai `4.2.86`. JANGAN upgrade — versi baru nge-block testnet untuk futures. Algo API dipanggil manual via `requests` di `place_algo_order()`
+- **ccxt version**: Pakai `4.2.86`. JANGAN upgrade — versi baru nge-block testnet untuk futures. Algo API dipanggil manual via `requests`
 - **Rate limiter**: Max 800 req/min. Kalau >5 pairs, ada 1 detik throttle antar LLM call
 - **`onchain_fetcher.py`**: Placeholder, tidak diimplementasi. Jangan hapus tapi jangan pakai juga
 - **RL training**: HANYA di Google Colab (GPU T4). Jangan install torch/gymnasium/SB3 di VPS — akan OOM
-- **Algo order cancel**: SL/TP ditempatkan via `place_algo_order()` (algoId). WAJIB cancel pakai `cancel_algo_order()` dari `exchange.py`, BUKAN `exchange.cancel_order()` — endpoint `/fapi/v1/order` tidak bisa cancel algo orders
-- **Algo order WS matching**: Saat algo order trigger, Binance buat order baru dengan `orderId` berbeda dari `algoId`. WS `ORDER_TRADE_UPDATE.i` = triggered orderId, BUKAN algoId. Fallback matching: cari trade by symbol + side
-- **Reconciliation symbol format**: `exchange.fetch_positions()` return unified symbol `'BTC/USDT:USDT'`. Ambil raw symbol dari `pos['info']['symbol']` (`'BTCUSDT'`), BUKAN dari `pos['symbol']` yang sudah di-unified
+- **Reconciliation symbol format**: `exchange.fetch_positions()` return unified symbol `'BTC/USDT:USDT'`. Ambil raw symbol dari `pos['info']['symbol']` (`'BTCUSDT'`), BUKAN dari `pos['symbol']`
 - **RiskAgent ValueError**: `RiskAgent.run()` bisa raise ValueError kalau risk distance terlalu kecil. WAJIB di-try/except di caller — kalau tidak, seluruh trading cycle crash untuk semua pair
-- **SL/TP both hit**: Kalau dalam 1 candle SL DAN TP sama-sama kena, SL prioritas (konservatif, sama dengan backtest engine dan real Binance behavior)
+- **OB Midpoint Overlap**: Jika harga sudah melewati OB midpoint di cycle berikutnya, `RiskAgent.run()` bisa raise `OverlapSkipError` (harga di luar OB zone → SKIP) atau adjust entry ke current_price (`entry_adjusted=True`). Live mode: adjusted entry pakai market order + langsung pasang SL/TP, bukan limit + PENDING_ENTRY
+- **SL/TP both hit**: Kalau dalam 1 candle SL DAN TP sama-sama kena, SL prioritas
 
 ## Config
 
-| Key | Default | Keterangan |
-|-----|---------|------------|
-| `EXECUTION_MODE` | `paper` | `paper` = simulasi di DB, `live` = order sungguhan ke Binance |
-| `USE_TESTNET` | `False` | `True` = Binance Testnet, `False` = Production |
-| `CONFIRM_MAINNET` | `False` | Wajib `True` kalau `USE_TESTNET=False` — speed bump anti salah klik |
-| `RISK_PER_TRADE_USD` | `10.0` | Risk per trade dalam USD (fixed, bukan persen) |
-| `RISK_REWARD_RATIO` | `2.0` | R:R ratio. Jangan hardcode — baca dari settings |
-| `FUTURES_DEFAULT_LEVERAGE` | `10` | Leverage default (1-125) |
-| `FUTURES_MARGIN_TYPE` | `isolated` | `isolated` atau `cross` |
-| `MAX_OPEN_POSITIONS` | `1` | Max posisi terbuka per pair |
-| `ORDER_EXPIRY_CANDLES` | `48` | Limit order expire setelah N candle H1 (48 = 2 hari) |
-| `DISABLE_SESSION_FILTER` | `True` | `True` = trade di semua jam, `False` = hanya London/NY session |
-| `CEREBRAS_MODEL` | `qwen-3-235b-...` | Model Analyst Agent |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | Model Commander + Concierge |
-| `LLM_FAST_TIMEOUT_SEC` | `45` | Timeout Cerebras & Groq |
-| `CONCIERGE_TIMEOUT_SEC` | `600` | Timeout Concierge (GLM-5 lambat) |
+| Key | Type | Default | Required | Keterangan |
+|-----|------|---------|----------|------------|
+| `EXECUTION_MODE` | str | `paper` | Yes | `paper` = simulasi di DB, `live` = order sungguhan |
+| `USE_TESTNET` | bool | `False` | Yes | `True` = Binance Testnet |
+| `CONFIRM_MAINNET` | bool | `False` | Yes* | Wajib `True` kalau `USE_TESTNET=False` |
+| `BINANCE_API_KEY` | SecretStr | - | Live only | Wajib jika `live` + `USE_TESTNET=False` |
+| `BINANCE_TESTNET_KEY` | SecretStr | - | Live only | Wajib jika `live` + `USE_TESTNET=True` |
+| `CEREBRAS_API_KEY` | SecretStr | - | Yes | Analyst Agent |
+| `GROQ_API_KEY` | SecretStr | - | Yes | Commander + Concierge |
+| `TELEGRAM_BOT_TOKEN` | SecretStr | - | Yes | - |
+| `TELEGRAM_CHAT_ID` | str | - | Yes | Bisa negatif (group) |
+| `RISK_PER_TRADE_USD` | float | `10.0` | No | Risk per trade dalam USD (fixed) |
+| `RISK_REWARD_RATIO` | float | `2.0` | No | Jangan hardcode — baca dari settings |
+| `FUTURES_DEFAULT_LEVERAGE` | int | `10` | No | Range 1-125 |
+| `FUTURES_MARGIN_TYPE` | str | `isolated` | No | `isolated` atau `cross` |
+| `MAX_OPEN_POSITIONS` | int | `1` | No | Per pair, bukan global |
+| `ORDER_EXPIRY_CANDLES` | int | `48` | No | Limit order expire setelah N candle H1 |
+| `DISABLE_SESSION_FILTER` | bool | `True` | No | `True` = trade semua jam |
+| `CEREBRAS_MODEL` | str | `qwen-3-235b-...` | No | Model Analyst Agent |
+| `GROQ_MODEL` | str | `llama-3.1-8b-instant` | No | Model Commander + Concierge |
+| `LLM_FAST_TIMEOUT_SEC` | int | `45` | No | Timeout Cerebras & Groq |
+| `CONCIERGE_TIMEOUT_SEC` | int | `600` | No | Timeout Concierge |
 
 ## Dependency Antar Modul
 
@@ -155,6 +191,7 @@ Semua agent bergantung ke `base_agent.py`. Semua config bergantung ke `settings.
 - **Jangan tulis raw SQL** — selalu pakai SQLAlchemy via `get_session()`
 - **Jangan install torch/gymnasium/SB3 di VPS** — OOM, training hanya di Colab
 - **Jangan upgrade ccxt** — versi baru nge-block testnet futures
+- **Jangan pakai `exchange.cancel_order()` untuk algo order** — pakai `cancel_algo_order()` dari `exchange.py`
 
 ## Maintenance Rule
 

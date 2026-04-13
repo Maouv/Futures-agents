@@ -17,7 +17,7 @@ from src.config.pairs import load_pairs
 from src.agents.math.trend_agent import TrendAgent
 from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.confirmation_agent import ConfirmationAgent
-from src.agents.math.risk_agent import RiskAgent
+from src.agents.math.risk_agent import RiskAgent, OverlapSkipError
 from src.agents.math.execution_agent import ExecutionAgent
 from src.agents.math.sltp_manager import check_paper_trades
 from src.agents.llm.analyst_agent import run_analyst
@@ -131,7 +131,10 @@ class TradingBot:
                 if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
                     if reversal.ob is not None:
                         try:
-                            risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
+                            risk = RiskAgent().run(decision.action, reversal.ob, df_h1, current_price=current_price)
+                        except OverlapSkipError as e:
+                            logger.info(f"{symbol}: SKIP (overlap) — {e}")
+                            continue
                         except ValueError as e:
                             logger.warning(f"{symbol}: RiskAgent validation failed: {e}")
                             continue
@@ -144,8 +147,9 @@ class TradingBot:
                         )
 
                         if result.action == 'OPEN':
+                            overlap_tag = " [OVERLAP]" if risk.entry_adjusted else ""
                             self.send_notification_sync(
-                                f"Paper {decision.action} | {symbol}\n"
+                                f"Paper {decision.action} | {symbol}{overlap_tag}\n"
                                 f"Entry: ${risk.entry_price:,.2f}\n"
                                 f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                                 f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
