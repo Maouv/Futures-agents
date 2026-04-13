@@ -217,6 +217,12 @@ class UserDataStream:
             return
 
         # ── Cari trade di DB berdasarkan order ID ──────────────────────────
+        # NOTE: SL/TP orders are placed via Algo API (place_algo_order), which
+        # returns an 'algoId'. When the algo order triggers, Binance creates a
+        # new order with a different orderId. The ORDER_TRADE_UPDATE event
+        # contains this new orderId, NOT the algoId. So matching by
+        # sl_order_id/tp_order_id (which store algoId) will fail for algo orders.
+        # Fallback: match by symbol + order type for SL/TP fills.
         with get_session() as db:
             # Cek apakah ini SL, TP, atau entry order
             trade = (
@@ -229,6 +235,24 @@ class UserDataStream:
                 )
                 .first()
             )
+
+            if trade is None and order_type in ('STOP_MARKET', 'STOP', 'TAKE_PROFIT_MARKET', 'TAKE_PROFIT'):
+                # Algo order triggered — match by symbol + side inference
+                # SL/TP are reduce_only: LONG trade has SELL SL/TP, SHORT trade has BUY SL/TP
+                expected_trade_side = 'SHORT' if side == 'BUY' else 'LONG'
+                trade = (
+                    db.query(PaperTrade)
+                    .filter(
+                        PaperTrade.status == 'OPEN',
+                        PaperTrade.pair == symbol,
+                        PaperTrade.side == expected_trade_side,
+                    )
+                    .first()
+                )
+                if trade:
+                    logger.info(
+                        f"Matched algo order by symbol+side | Order {order_id} -> Trade {trade.id} ({symbol})"
+                    )
 
             if trade is None:
                 logger.debug(f"No matching OPEN trade for order {order_id}")
@@ -304,17 +328,19 @@ class UserDataStream:
                 logger.error(f"Notification callback error: {e}")
 
     def _cancel_counter_order(self, order_id: str, symbol: str, reason: str) -> None:
-        """Cancel order yang counterpart (SL hit → cancel TP, atau sebaliknya)."""
+        """Cancel order yang counterpart (SL hit → cancel TP, atau sebaliknya).
+        SL/TP are Algo Orders — must use cancel_algo_order() instead of exchange.cancel_order().
+        """
         try:
-            exchange = get_exchange()
-            exchange.cancel_order(order_id, symbol)
+            from src.utils.exchange import cancel_algo_order
+            cancel_algo_order(order_id, symbol)
             logger.info(
                 f"Counter-order cancelled | ID: {order_id} | "
                 f"Reason: {reason} was hit"
             )
         except Exception as e:
             # Order mungkin sudah ter-cancel atau ter-fill bersamaan
-            if 'Unknown order' in str(e) or 'Order does not exist' in str(e):
+            if 'Unknown order' in str(e) or 'Order does not exist' in str(e) or 'algoId' in str(e):
                 logger.debug(f"Counter-order {order_id} already gone")
             else:
                 logger.error(

@@ -130,7 +130,11 @@ class TradingBot:
                 # ── 5. Risk & Execution ────────────────────────────────────
                 if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:
                     if reversal.ob is not None:
-                        risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
+                        try:
+                            risk = RiskAgent().run(decision.action, reversal.ob, df_h1)
+                        except ValueError as e:
+                            logger.warning(f"{symbol}: RiskAgent validation failed: {e}")
+                            continue
                         result = self._execution_agent.run(
                             symbol=symbol,
                             risk_result=risk,
@@ -271,7 +275,18 @@ class TradingBot:
             for pos in positions:
                 amt = float(pos.get('contracts', pos.get('positionAmt', 0)))
                 if abs(amt) > 0:
-                    symbol = pos.get('symbol', '').replace('/', '').replace(':', '')
+                    # Use raw Binance symbol from 'info' dict — ccxt unified format
+                    # is 'BTC/USDT:USDT' which doesn't match our DB format 'BTCUSDT'
+                    symbol = pos.get('info', {}).get('symbol', '')
+                    if not symbol:
+                        # Fallback: parse unified format 'BTC/USDT:USDT' -> 'BTCUSDT'
+                        unified = pos.get('symbol', '')
+                        if '/' in unified:
+                            # 'BTC/USDT:USDT' -> 'BTC' + 'USDT' = 'BTCUSDT'
+                            base_quote = unified.split(':')[0]  # 'BTC/USDT'
+                            symbol = base_quote.replace('/', '')
+                        else:
+                            symbol = unified
                     active_pairs.add(symbol)
 
             # Check DB trades vs Binance reality

@@ -51,21 +51,22 @@ def _cleanup_mode_trades(mode: str) -> int:
             if mode == 'testnet':
                 # Cancel orders di Binance testnet
                 try:
-                    from src.utils.exchange import get_exchange
+                    from src.utils.exchange import get_exchange, cancel_algo_order
                     exchange = get_exchange()
                     close_side = 'sell' if trade.side == 'LONG' else 'buy'
 
-                    # Cancel SL, TP, dan entry orders
+                    # Cancel SL, TP (algo orders — must use cancel_algo_order)
                     if trade.sl_order_id:
                         try:
-                            exchange.cancel_order(trade.sl_order_id, trade.pair)
+                            cancel_algo_order(trade.sl_order_id, trade.pair)
                         except Exception:
                             pass
                     if trade.tp_order_id:
                         try:
-                            exchange.cancel_order(trade.tp_order_id, trade.pair)
+                            cancel_algo_order(trade.tp_order_id, trade.pair)
                         except Exception:
                             pass
+                    # Entry order is a regular limit order — use standard cancel
                     if trade.status == 'PENDING_ENTRY' and trade.exchange_order_id:
                         try:
                             exchange.cancel_order(trade.exchange_order_id, trade.pair)

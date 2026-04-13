@@ -2,6 +2,8 @@
 
 Bot trading crypto futures multi-agent yang jalan 24/7 di VPS. Trade Binance USD-M Futures via ccxt. Pipeline: Math Agents (pure Python) → LLM Analyst (Cerebras) → optional RL filter (ONNX).
 
+**Bahasa**: Gunakan Bahasa Indonesia untuk semua komunikasi dan penjelasan. English hanya untuk code, identifier, dan technical terms.
+
 ---
 
 ## Arsitektur
@@ -97,12 +99,17 @@ src/utils/
 - **Rate limiter**: Max 800 req/min. Kalau >5 pairs, ada 1 detik throttle antar LLM call
 - **`onchain_fetcher.py`**: Placeholder, tidak diimplementasi. Jangan hapus tapi jangan pakai juga
 - **RL training**: HANYA di Google Colab (GPU T4). Jangan install torch/gymnasium/SB3 di VPS — akan OOM
+- **Algo order cancel**: SL/TP ditempatkan via `place_algo_order()` (algoId). WAJIB cancel pakai `cancel_algo_order()` dari `exchange.py`, BUKAN `exchange.cancel_order()` — endpoint `/fapi/v1/order` tidak bisa cancel algo orders
+- **Algo order WS matching**: Saat algo order trigger, Binance buat order baru dengan `orderId` berbeda dari `algoId`. WS `ORDER_TRADE_UPDATE.i` = triggered orderId, BUKAN algoId. Fallback matching: cari trade by symbol + side
+- **Reconciliation symbol format**: `exchange.fetch_positions()` return unified symbol `'BTC/USDT:USDT'`. Ambil raw symbol dari `pos['info']['symbol']` (`'BTCUSDT'`), BUKAN dari `pos['symbol']` yang sudah di-unified
+- **RiskAgent ValueError**: `RiskAgent.run()` bisa raise ValueError kalau risk distance terlalu kecil. WAJIB di-try/except di caller — kalau tidak, seluruh trading cycle crash untuk semua pair
+- **SL/TP both hit**: Kalau dalam 1 candle SL DAN TP sama-sama kena, SL prioritas (konservatif, sama dengan backtest engine dan real Binance behavior)
 
 ## Config
 
 | Key | Default | Keterangan |
 |-----|---------|------------|
-| `EXECUTION_MODE` | `paper` | `paper` = simulasidi DB, `live` = order sungguhan ke Binance |
+| `EXECUTION_MODE` | `paper` | `paper` = simulasi di DB, `live` = order sungguhan ke Binance |
 | `USE_TESTNET` | `False` | `True` = Binance Testnet, `False` = Production |
 | `CONFIRM_MAINNET` | `False` | Wajib `True` kalau `USE_TESTNET=False` — speed bump anti salah klik |
 | `RISK_PER_TRADE_USD` | `10.0` | Risk per trade dalam USD (fixed, bukan persen) |
@@ -111,7 +118,7 @@ src/utils/
 | `FUTURES_MARGIN_TYPE` | `isolated` | `isolated` atau `cross` |
 | `MAX_OPEN_POSITIONS` | `1` | Max posisi terbuka per pair |
 | `ORDER_EXPIRY_CANDLES` | `48` | Limit order expire setelah N candle H1 (48 = 2 hari) |
-| `DISABLE_SESSION_FILTER` | `False` | `True` = trade di semua jam (testing only) |
+| `DISABLE_SESSION_FILTER` | `True` | `True` = trade di semua jam, `False` = hanya London/NY session |
 | `CEREBRAS_MODEL` | `qwen-3-235b-...` | Model Analyst Agent |
 | `GROQ_MODEL` | `llama-3.1-8b-instant` | Model Commander + Concierge |
 | `LLM_FAST_TIMEOUT_SEC` | `45` | Timeout Cerebras & Groq |
@@ -133,7 +140,24 @@ main.py → ohlcv_fetcher → exchange (singleton)
 
 Semua agent bergantung ke `base_agent.py`. Semua config bergantung ke `settings.py`. Exchange diakses via singleton `get_exchange()`.
 
+## Environment & Execution Rules
+
+- **Python environment**: WAJIB `source venv/bin/activate` sebelum menjalankan Python apapun (`python`, `pytest`, `pip`, dll). Jangan pernah run tanpa activate venv
+- **Sequential execution**: Kerjakan SEMUA tugas secara sequential, satu per satu. JANGAN pernah paralel — model ini hanya 1 concurrent request. Tidak ada parallel tool calls, tidak ada background tasks yang overlap
+
+## Anti-Patterns / Jangan Pernah
+
+- **Jangan buat class kalau function cukup** — math agents pakai class karena ABC pattern, tapi utility/helper cukup function
+- **Jangan refactor yang sudah jalan** — kalau tidak ada bug report atau feature request, biarkan apa adanya
+- **Jangan tambah dependency baru** tanpa cek dulu apakah sudah ada di requirements.txt atau stdlib
+- **Jangan pakai `os.getenv()`** — selalu `settings.XXX` atau `settings.get_secret_value()`
+- **Jangan buat `ccxt.binanceusdm()` langsung** — selalu `get_exchange()`
+- **Jangan tulis raw SQL** — selalu pakai SQLAlchemy via `get_session()`
+- **Jangan install torch/gymnasium/SB3 di VPS** — OOM, training hanya di Colab
+- **Jangan upgrade ccxt** — versi baru nge-block testnet futures
+
 ## Maintenance Rule
 
 - **ALWAYS update CLAUDE.md** when codebase changes affect architecture, gotchas, or conventions
 - **CLAUDE.md max 300 lines** — if exceeding, compact by merging sections, removing verbose examples, or archiving stale content. Never remove critical gotchas or conventions
+- **Verify file existence** before referencing — if architecture tree is stale, update it

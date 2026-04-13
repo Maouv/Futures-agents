@@ -82,8 +82,10 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
                 if trade.status != 'OPEN':
                     logger.debug(f"Trade {trade.id} already closed by another thread. Skipping.")
                     continue
-                close_reason = 'TP' if hit_tp else 'SL'
-                close_price = trade.tp_price if hit_tp else trade.sl_price
+                # Conservative: jika candle menembus SL DAN TP, SL prioritas
+                # (sama dengan backtest engine dan Binance real behavior)
+                close_reason = 'SL' if hit_sl else 'TP'
+                close_price = trade.sl_price if hit_sl else trade.tp_price
 
                 # Hitung PnL
                 if trade.side == 'LONG':
