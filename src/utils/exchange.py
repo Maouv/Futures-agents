@@ -183,7 +183,7 @@ def place_algo_order(
     response = http_requests.post(url, headers=headers, timeout=10)
 
     result = response.json()
-    if response.status_code != 200 or 'code' in result:
+    if response.status_code != 200 or ('code' in result and result.get('code') != 200):
         raise ccxt.ExchangeError(
             f"Algo order failed: {result.get('msg', str(result))}"
         )
@@ -240,8 +240,12 @@ def cancel_algo_order(
 
     result = response.json()
     if response.status_code != 200 or ('code' in result and result.get('code') != 200):
+        msg = result.get('msg', str(result))
+        if 'Unknown order' in msg or 'Order does not exist' in msg:
+            logger.debug(f"Algo order {algo_order_id} already gone: {msg}")
+            return result  # bukan error, lanjut
         raise ccxt.ExchangeError(
-            f"Cancel algo order failed: {result.get('msg', str(result))}"
+            f"Cancel algo order failed: {msg}"
         )
 
     logger.debug(f"Algo order cancelled: {algo_order_id}")
