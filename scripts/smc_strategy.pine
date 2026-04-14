@@ -1,0 +1,559 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMC Strategy — Port dari futures-agents codebase
+// OB + FVG + BOS/CHOCH detection + Multi-timeframe entry
+// ═══════════════════════════════════════════════════════════════════════════════
+//@version=5
+strategy("SMC OB+FVG+BOS/CHOCH Strategy", overlay=true,
+     initial_capital=1000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10, commission_type=strategy.commission.percent,
+     commission_value=0.04, slippage=1)
+
+// ── Inputs ────────────────────────────────────────────────────────────────────
+swingLenOB    = input.int(5,  "Swing Length (OB)", minval=1)
+swingLenBOS  = input.int(10, "Swing Length (BOS/CHOCH)", minval=1)
+atrPeriod    = input.int(14, "ATR Period", minval=1)
+rrRatio      = input.float(2.0, "Risk:Reward Ratio", minval=0.5, step=0.1)
+riskUSD      = input.float(10.0, "Risk per Trade (USD)", minval=1.0)
+leverage     = input.int(10, "Leverage", minval=1, maxval=125)
+maxOpenPos   = input.int(1, "Max Open Positions per Pair", minval=1)
+atrSlMult    = input.float(1.0, "ATR SL Multiplier", minval=0.5, step=0.1)
+atrSlBuffer  = input.float(0.5, "Min SL Buffer (ATR mult)", minval=0.1, step=0.1)
+
+// Multi-timeframe
+htfBiasTF    = input.timeframe("240", "HTF Trend (H4)")
+mtfSignalTF  = input.timeframe("60",  "MTF Signal (H1)")
+ltfConfTF    = input.timeframe("15",  "LTF Confirm (15m)")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 1. SWING HIGHS / LOWS — Port dari _smc_core.swing_highs_lows()
+// ══════════════════════════════════════════════════════════════════════════════
+// Python: rolling window swing_length*2, lalu dedup consecutive same-type swings
+// Pine: ta.pivothigh/ta.pivotlow equivalent, deduplicated
+
+// Detect raw pivots (delayed by swingLen bars)
+pivotHigh(swingLen) =>
+    ta.pivothigh(high, swingLen, swingLen)
+
+pivotLow(swingLen) =>
+    ta.pivotlow(low, swingLen, swingLen)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 2. FVG — Fair Value Gap — Port dari _smc_core.fvg()
+// ══════════════════════════════════════════════════════════════════════════════
+// Bullish FVG: high[1] < low[-1] & close > open (bullish candle)
+// Bearish FVG: low[1] > high[-1] & close < open (bearish candle)
+// Mitigated: bullish FVG → low dips below top; bearish FVG → high rises above bottom
+
+type FVG
+    int    barIdx
+    float  top
+    float  bottom
+    int    bias       // 1=bullish, -1=bearish
+    bool   mitigated
+    int    mitIdx
+
+var array<FVG> fvgList = array.new<FVG>()
+
+// Detect FVG on current bar (using bars [1], [0] which is the "middle" candle, and [-1] which is lookahead)
+// In Python: high.shift(1) < low.shift(-1) means prev high < next low
+// In Pine (realtime, no lookahead): we detect FVG at bar [1] (the middle candle)
+// Bullish: high[2] < low[0] & close[1] > open[1]
+// Bearish: low[2] > high[0] & close[1] < open[1]
+
+bullishFVG = high[2] < low and close[1] > open[1]
+bearishFVG = low[2] > high and close[1] < open[1]
+
+if bullishFVG or bearishFVG
+    bias    = bullishFVG ? 1 : -1
+    fvgTop  = bullishFVG ? low : low[2]
+    fvgBot  = bullishFVG ? high[2] : high
+    newFVG  = FVG.new(bar_index - 1, fvgTop, fvgBot, bias, false, na)
+    array.push(fvgList, newFVG)
+
+// Check mitigation for all active FVGs
+if array.size(fvgList) > 0
+    for i = array.size(fvgList) - 1 to 0
+        f = array.get(fvgList, i)
+        if not f.mitigated
+            if f.bias == 1 and low <= f.top
+                f.mitigated := true
+                f.mitIdx    := bar_index
+            else if f.bias == -1 and high >= f.bottom
+                f.mitigated := true
+                f.mitIdx    := bar_index
+
+// Clean old mitigated FVGs (keep last 50)
+if array.size(fvgList) > 50
+    trimmed = array.new<FVG>()
+    for i = array.size(fvgList) - 1 to math.max(0, array.size(fvgList) - 50)
+        array.push(trimmed, array.get(fvgList, i))
+    fvgList := trimmed
+
+// Plot active FVGs
+// Bullish FVG = green box, Bearish FVG = red box
+var label[] fvgLabels = array.new<label>()
+if barstate.islast
+    for l in fvgLabels
+        label.delete(l)
+    array.clear(fvgLabels)
+    for i = 0 to array.size(fvgList) - 1
+        f = array.get(fvgList, i)
+        if not f.mitigated and bar_index - f.barIdx < 200
+            bgColor = f.bias == 1 ? color.new(color.green, 85) : color.new(color.red, 85)
+            lb = label.new(f.barIdx, f.top, "FVG", style=label.style_none,
+                 bgcolor=bgColor, textcolor=f.bias == 1 ? color.green : color.red)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 3. BOS/CHOCH — Break of Structure / Change of Character
+//    Port dari _smc_core.bos_choch()
+// ══════════════════════════════════════════════════════════════════════════════
+// Logic: Track 4 consecutive swing points.
+//   BOS Bullish: [-1, +1, -1, +1] with L4 < L2 < L3 < L1 (higher highs, higher lows)
+//   BOS Bearish: [+1, -1, +1, -1] with L4 > L2 > L3 > L1 (lower highs, lower lows)
+//   CHOCH Bullish: [-1, +1, -1, +1] with L1 > L3 > L4 > L2 (break above prev high in downtrend)
+//   CHOCH Bearish: [+1, -1, +1, -1] with L1 < L3 < L4 < L2 (break below prev low in uptrend)
+// Break confirmed when close crosses the level.
+
+type BOSCHOCH
+    int    barIdx
+    string sigType  // "BOS" or "CHOCH"
+    int    bias      // 1=bullish, -1=bearish
+    float  level
+    bool   broken
+
+var array<BOSCHOCH> bcList = array.new<BOSCHOCH>()
+
+// Track swings using pivot detection
+var float  lastSwingLevel = na
+var int    lastSwingBias  = 0
+var float  sw1 = na, sw2 = na, sw3 = na, sw4 = na
+var int    sb1 = 0,  sb2 = 0,  sb3 = 0,  sb4 = 0
+var float  sl1 = na, sl2 = na, sl3 = na, sl4 = na
+
+pHi = pivotHigh(swingLenBOS)
+pLo = pivotLow(swingLenBOS)
+
+if not na(pHi)
+    // New swing high detected (shift all down)
+    sw4 := sw3; sb4 := sb3; sl4 := sl3
+    sw3 := sw2; sb3 := sb2; sl3 := sl2
+    sw2 := sw1; sb2 := sb1; sl2 := sl1
+    sw1 := 1.0;  sb1 := bar_index - swingLenBOS; sl1 := pHi
+
+if not na(pLo)
+    sw4 := sw3; sb4 := sb3; sl4 := sl3
+    sw3 := sw2; sb3 := sb2; sl3 := sl2
+    sw2 := sw1; sb2 := sb1; sl2 := sl1
+    sw1 := -1.0; sb1 := bar_index - swingLenBOS; sl1 := pLo
+
+// Check for BOS/CHOCH pattern when we have 4 swings
+canCheck = not na(sw1) and not na(sw2) and not na(sw3) and not na(sw4)
+if canCheck
+    // BOS Bullish: pattern [-1, 1, -1, 1] and L4 < L2 < L3 < L1
+    isBullBOS = sw4 == -1 and sw3 == 1 and sw2 == -1 and sw1 == 1
+              and sl4 < sl2 and sl2 < sl3 and sl3 < sl1
+    // BOS Bearish: pattern [1, -1, 1, -1] and L4 > L2 > L3 > L1
+    isBearBOS = sw4 == 1 and sw3 == -1 and sw2 == 1 and sw1 == -1
+              and sl4 > sl2 and sl2 > sl3 and sl3 > sl1
+    // CHOCH Bullish: pattern [-1, 1, -1, 1] and L1 > L3 > L4 > L2
+    isBullCHOCH = sw4 == -1 and sw3 == 1 and sw2 == -1 and sw1 == 1
+                 and sl1 > sl3 and sl3 > sl4 and sl4 > sl2
+    // CHOCH Bearish: pattern [1, -1, 1, -1] and L1 < L3 < L4 < L2
+    isBearCHOCH = sw4 == 1 and sw3 == -1 and sw2 == 1 and sw1 == -1
+                  and sl1 < sl3 and sl3 < sl4 and sl4 < sl2
+
+    if isBullBOS
+        array.push(bcList, BOSCHOCH.new(sb2, "BOS", 1, sl3, false))
+    if isBearBOS
+        array.push(bcList, BOSCHOCH.new(sb2, "BOS", -1, sl3, false))
+    if isBullCHOCH
+        array.push(bcList, BOSCHOCH.new(sb2, "CHOCH", 1, sl3, false))
+    if isBearCHOCH
+        array.push(bcList, BOSCHOCH.new(sb2, "CHOCH", -1, sl3, false))
+
+    // Reset oldest to prevent re-detection on same 4 swings
+    sw4 := na; sb4 := na; sl4 := na
+
+// Check break confirmation for BOS/CHOCH signals
+if array.size(bcList) > 0
+    for i = array.size(bcList) - 1 to 0
+        bc = array.get(bcList, i)
+        if not bc.broken
+            if bc.bias == 1 and close > bc.level
+                bc.broken := true
+            else if bc.bias == -1 and close < bc.level
+                bc.broken := true
+
+// Plot BOS/CHOCH
+var label[] bcLabels = array.new<label>()
+if barstate.islast
+    for l in bcLabels
+        label.delete(l)
+    array.clear(bcLabels)
+    for i = 0 to array.size(bcList) - 1
+        bc = array.get(bcList, i)
+        if bc.broken and bar_index - bc.barIdx < 200
+            txt  = bc.sigType + (bc.bias == 1 ? " ↑" : " ↓")
+            col  = bc.bias == 1 ? color.teal : color.orange
+            lb = label.new(bc.barIdx, bc.level, txt,
+                 style=label.style_label_down, color=col, textcolor=color.white)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 4. ORDER BLOCKS — Port dari _smc_core.ob()
+// ══════════════════════════════════════════════════════════════════════════════
+// Bullish OB: When close breaks above last swing high → OB = candle with lowest low
+//             between that swing high and the break candle.
+// Bearish OB: When close breaks below last swing low → OB = candle with highest high
+//             between that swing low and the break candle.
+// Mitigation: Bullish OB mitigated when low < OB bottom.
+//             Bearish OB mitigated when high > OB top.
+// Breaker: After mitigation, if price fully crosses through OB → OB is invalidated.
+
+type OrderBlock
+    int    barIdx
+    float  top
+    float  bottom
+    int    bias       // 1=bullish, -1=bearish
+    bool   mitigated
+    bool   invalidated
+
+var array<OrderBlock> obList = array.new<OrderBlock>()
+
+// Track last swing high/low for OB detection
+var float lastSwHiLevel = na
+var int   lastSwHiBar  = na
+var float lastSwLoLevel = na
+var int   lastSwLoBar  = na
+var bool  swHiCrossed  = false
+var bool  swLoCrossed  = false
+
+obPHi = pivotHigh(swingLenOB)
+obPLo = pivotLow(swingLenOB)
+
+if not na(obPHi)
+    lastSwHiLevel := obPHi
+    lastSwHiBar   := bar_index - swingLenOB
+    swHiCrossed   := false
+
+if not na(obPLo)
+    lastSwLoLevel := obPLo
+    lastSwLoBar   := bar_index - swingLenOB
+    swLoCrossed   := false
+
+// Bullish OB: close breaks above last swing high
+if not swHiCrossed and not na(lastSwHiLevel) and close > lastSwHiLevel
+    swHiCrossed := true
+    // Find candle with lowest low between swing high bar and current bar
+    obTop    = high[1]
+    obBot    = low[1]
+    obBar    = bar_index - 1
+    // Search from lastSwHiBar+1 to current-1 for lowest low
+    startSearch = math.max(lastSwHiBar + 1, bar_index - swingLenOB - 1)
+    for j = startSearch to bar_index - 1
+        if low[j] < obBot
+            obBot := low[j]
+            obTop := high[j]
+            obBar := j
+    array.push(obList, OrderBlock.new(obBar, obTop, obBot, 1, false, false))
+
+// Bearish OB: close breaks below last swing low
+if not swLoCrossed and not na(lastSwLoLevel) and close < lastSwLoLevel
+    swLoCrossed := true
+    obTop    = high[1]
+    obBot    = low[1]
+    obBar    = bar_index - 1
+    startSearch = math.max(lastSwLoBar + 1, bar_index - swingLenOB - 1)
+    for j = startSearch to bar_index - 1
+        if high[j] > obTop
+            obTop := high[j]
+            obBot := low[j]
+            obBar := j
+    array.push(obList, OrderBlock.new(obBar, obTop, obBot, -1, false, false))
+
+// Check OB mitigation and invalidation
+if array.size(obList) > 0
+    for i = array.size(obList) - 1 to 0
+        ob = array.get(obList, i)
+        if not ob.invalidated
+            // Mitigation check
+            if not ob.mitigated
+                if ob.bias == 1 and low < ob.bottom
+                    ob.mitigated := true
+                else if ob.bias == -1 and high > ob.top
+                    ob.mitigated := true
+            // Invalidation (breaker) check — after mitigation, full cross
+            if ob.mitigated
+                if ob.bias == 1 and high > ob.top
+                    ob.invalidated := true
+                else if ob.bias == -1 and low < ob.bottom
+                    ob.invalidated := true
+
+// Clean old OBs
+if array.size(obList) > 30
+    trimmed = array.new<OrderBlock>()
+    for i = array.size(obList) - 1 to math.max(0, array.size(obList) - 30)
+        ob = array.get(obList, i)
+        if not ob.invalidated
+            array.push(trimmed, ob)
+    obList := trimmed
+
+// Plot active OBs
+var box[]   obBoxes  = array.new<box>()
+var label[] obLabels = array.new<label>()
+if barstate.islast
+    for b in obBoxes
+        box.delete(b)
+    for l in obLabels
+        label.delete(l)
+    array.clear(obBoxes)
+    array.clear(obLabels)
+    for i = 0 to array.size(obList) - 1
+        ob = array.get(obList, i)
+        if not ob.invalidated and bar_index - ob.barIdx < 200
+            obColor = ob.bias == 1 ? color.new(color.teal, 80) : color.new(color.orange, 80)
+            bx = box.new(ob.barIdx, ob.top, bar_index, ob.bottom,
+                 bgcolor=obColor, border_color=ob.bias == 1 ? color.teal : color.orange)
+            lbl = ob.bias == 1 ? "OB+" : "OB-"
+            lb = label.new(ob.barIdx, ob.top, lbl,
+                 style=label.style_label_down,
+                 color=ob.mitigated ? color.gray : (ob.bias == 1 ? color.teal : color.orange),
+                 textcolor=color.white)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 5. MULTI-TIMEFRAME LOGIC
+//    Port dari trend_agent.py (H4), reversal_agent.py (H1), confirmation_agent.py (15m)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── H4 Trend Bias (TrendAgent equivalent) ──────────────────────────────────
+// Last broken BOS/CHOCH on H4 determines trend bias
+[htfClose, htfHigh, htfLow, htfOpen] = request.security(syminfo.tickerid, htfBiasTF, [close, high, low, open])
+
+// We compute BOS/CHOCH bias on H4 by tracking swing breaks on H4 data
+var int   h4Bias       = 0       // 1=bullish, -1=bearish, 0=ranging
+var float h4LastSwHi   = na
+var float h4LastSwLo   = na
+var bool  h4SwHiBroken = false
+var bool  h4SwLoBroken = false
+
+// H4 pivot detection (use request.security with lookahead_off to avoid repainting)
+h4PivotHi = request.security(syminfo.tickerid, htfBiasTF, ta.pivothigh(high, swingLenBOS, swingLenBOS), lookahead=barmerge.lookahead_off)
+h4PivotLo = request.security(syminfo.tickerid, htfBiasTF, ta.pivotlow(low, swingLenBOS, swingLenBOS), lookahead=barmerge.lookahead_off)
+
+if not na(h4PivotHi)
+    h4LastSwHi   := h4PivotHi
+    h4SwHiBroken := false
+
+if not na(h4PivotLo)
+    h4LastSwLo   := h4PivotLo
+    h4SwLoBroken := false
+
+// H4 bias from swing breaks
+if not h4SwHiBroken and htfClose > h4LastSwHi
+    h4SwHiBroken := true
+    h4Bias       := 1   // Bullish bias — higher high broken
+
+if not h4SwLoBroken and htfClose < h4LastSwLo
+    h4SwLoBroken := true
+    h4Bias       := -1  // Bearish bias — lower low broken
+
+// ── H1 Reversal Signal (ReversalAgent equivalent) ──────────────────────────
+// Need: OB + recent BOS/CHOCH confluence on H1
+
+// H1 data
+[h1Close, h1High, h1Low] = request.security(syminfo.tickerid, mtfSignalTF, [close, high, low], lookahead=barmerge.lookahead_off)
+
+// We reuse the CURRENT timeframe OB/BOS/CHOCH arrays but also compute H1 versions
+// For simplicity in Pine, we compute H1 OB signals via security
+// The OB detection on current chart uses H1 timeframe inputs
+
+// Find nearest active bullish OB (price overlapping with OB zone)
+nearestBullOB() =>
+    result = OrderBlock.new(na, na, na, 0, false, false)
+    for i = 0 to array.size(obList) - 1
+        ob = array.get(obList, i)
+        if ob.bias == 1 and not ob.invalidated and not ob.mitigated
+            if low <= ob.top and high >= ob.bottom
+                if na(result.top) or ob.top > result.top
+                    result := ob
+    result
+
+nearestBearOB() =>
+    result = OrderBlock.new(na, na, na, 0, false, false)
+    for i = 0 to array.size(obList) - 1
+        ob = array.get(obList, i)
+        if ob.bias == -1 and not ob.invalidated and not ob.mitigated
+            if low <= ob.top and high >= ob.bottom
+                if na(result.bottom) or ob.bottom < result.bottom
+                    result := ob
+    result
+
+// Last BOS/CHOCH signal within N bars
+lastBCSignal(lookback) =>
+    result = BOSCHOCH.new(na, "NONE", 0, na, false)
+    for i = array.size(bcList) - 1 to 0
+        bc = array.get(bcList, i)
+        if bc.broken and bar_index - bc.barIdx <= lookback
+            result := bc
+            break
+    result
+
+// ── 15m Confirmation (ConfirmationAgent equivalent) ────────────────────────
+// BOS alignment or FVG confluence on 15m
+// We use request.security for 15m BOS/CHOCH and FVG
+
+[ltfClose, ltfHigh, ltfLow] = request.security(syminfo.tickerid, ltfConfTF, [close, high, low], lookahead=barmerge.lookahead_off)
+
+// 15m pivot-based BOS for confirmation
+ltfPivotHi = request.security(syminfo.tickerid, ltfConfTF, ta.pivothigh(high, swingLenOB, swingLenOB), lookahead=barmerge.lookahead_off)
+ltfPivotLo = request.security(syminfo.tickerid, ltfConfTF, ta.pivotlow(low, swingLenOB, swingLenOB), lookahead=barmerge.lookahead_off)
+
+var int   ltfLastBias = 0
+var float ltfLastSwHi = na
+var float ltfLastSwLo = na
+var bool  ltfSwHiX    = false
+var bool  ltfSwLoX    = false
+
+if not na(ltfPivotHi)
+    ltfLastSwHi := ltfPivotHi
+    ltfSwHiX    := false
+if not na(ltfPivotLo)
+    ltfLastSwLo := ltfPivotLo
+    ltfSwLoX    := false
+
+if not ltfSwHiX and ltfClose > ltfLastSwHi
+    ltfSwHiX    := true
+    ltfLastBias := 1
+if not ltfSwLoX and ltfClose < ltfLastSwLo
+    ltfSwLoX    := true
+    ltfLastBias := -1
+
+// FVG on current chart (reused for 15m if chart is 15m)
+hasBullFVG() =>
+    result = false
+    for i = 0 to array.size(fvgList) - 1
+        f = array.get(fvgList, i)
+        if f.bias == 1 and not f.mitigated
+            result := true
+            break
+    result
+
+hasBearFVG() =>
+    result = false
+    for i = 0 to array.size(fvgList) - 1
+        f = array.get(fvgList, i)
+        if f.bias == -1 and not f.mitigated
+            result := true
+            break
+    result
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 6. STRATEGY ENTRY/EXIT — Port dari main.py pipeline
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ATR for SL/TP calculation
+atr = ta.atr(atrPeriod)
+
+// ── LONG Entry Logic ────────────────────────────────────────────────────────
+// 1. H4 trend bias = BULLISH (h4Bias == 1)
+// 2. H1: bullish OB overlapping price + recent bullish BOS/CHOCH
+// 3. 15m: BOS alignment (bullish) OR FVG confluence (bullish unfilled)
+// 4. Risk: SL at OB bottom - ATR*mult, TP = entry + risk * RR
+
+bullOB     = nearestBullOB()
+recentBC   = lastBCSignal(20)
+ltfBullOK  = ltfLastBias == 1 or hasBullFVG()
+
+longCond = h4Bias == 1                                    // H4 bullish
+     and bullOB.bias == 1                                 // Active bullish OB overlapping
+     and recentBC.bias == 1 and recentBC.broken           // Recent bullish BOS/CHOCH
+     and ltfBullOK                                        // 15m confirmation
+     and strategy.position_size == 0                       // No open position
+     and not na(atr)
+
+// ── SHORT Entry Logic ───────────────────────────────────────────────────────
+bearOB     = nearestBearOB()
+ltfBearOK  = ltfLastBias == -1 or hasBearFVG()
+
+shortCond = h4Bias == -1                                   // H4 bearish
+      and bearOB.bias == -1                                // Active bearish OB overlapping
+      and recentBC.bias == -1 and recentBC.broken         // Recent bearish BOS/CHOCH
+      and ltfBearOK                                       // 15m confirmation
+      and strategy.position_size == 0
+      and not na(atr)
+
+// ── Risk Calculation (RiskAgent equivalent) ─────────────────────────────────
+calcRisk(signal, ob_top, ob_bot, curPrice, atrVal) =>
+    obMid    = (ob_top + ob_bot) / 2.0
+    entry    = obMid
+    adjusted = false
+
+    // OB Midpoint Overlap: if price past midpoint, adjust entry
+    if signal == "LONG" and curPrice > obMid
+        entry    := curPrice
+        adjusted := true
+    else if signal == "SHORT" and curPrice < obMid
+        entry    := curPrice
+        adjusted := true
+
+    // SL at OB boundary ± ATR
+    sl = signal == "LONG" ? ob_bot - atrVal * atrSlMult : ob_top + atrVal * atrSlMult
+
+    // Minimum SL buffer
+    minSlDist = atrVal * atrSlBuffer
+    if signal == "LONG" and (entry - sl) < minSlDist
+        sl := entry - minSlDist
+    else if signal == "SHORT" and (sl - entry) < minSlDist
+        sl := entry + minSlDist
+
+    riskDist  = math.abs(entry - sl)
+    tp        = signal == "LONG" ? entry + riskDist * rrRatio : entry - riskDist * rrRatio
+    posSize   = riskUSD / riskDist
+    marginReq = (posSize * entry) / leverage
+
+    [entry, sl, tp, posSize, marginReq, adjusted]
+
+// ── Execute LONG ────────────────────────────────────────────────────────────
+if longCond
+    [entry, sl, tp, posSize, marginReq, adj] = calcRisk("LONG", bullOB.top, bullOB.bottom, close, atr)
+    if posSize > 0 and marginReq > 0
+        qty = strategy.percent_of_equity * posSize / close * 100
+        strategy.entry("LONG", strategy.long, qty=math.max(1, round(posSize)))
+        strategy.exit("LONG_EXIT", "LONG", limit=tp, stop=sl)
+
+// ── Execute SHORT ───────────────────────────────────────────────────────────
+if shortCond
+    [entry, sl, tp, posSize, marginReq, adj] = calcRisk("SHORT", bearOB.top, bearOB.bottom, close, atr)
+    if posSize > 0 and marginReq > 0
+        strategy.entry("SHORT", strategy.short, qty=math.max(1, round(posSize)))
+        strategy.exit("SHORT_EXIT", "SHORT", limit=tp, stop=sl)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 7. PLOTTING & DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Trend bias background
+bgcolor(h4Bias == 1 ? color.new(color.green, 95) : h4Bias == -1 ? color.new(color.red, 95) : na)
+
+// Current bias text
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1)
+if barstate.islast
+    biasTxt  = h4Bias == 1 ? "BULLISH" : h4Bias == -1 ? "BEARISH" : "RANGING"
+    biasCol  = h4Bias == 1 ? color.green : h4Bias == -1 ? color.red : color.gray
+    obCount  = array.size(obList)
+    fvgCount = array.size(fvgList)
+    bcCount  = array.size(bcList)
+
+    table.cell(dash, 0, 0, "H4 Bias",   text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, biasTxt,      text_color=biasCol,     text_size=size.small)
+    table.cell(dash, 0, 1, "Active OBs", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 1, str.tostring(obCount),  text_color=color.yellow, text_size=size.small)
+    table.cell(dash, 0, 2, "FVGs",       text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(fvgCount), text_color=color.yellow, text_size=size.small)
+    table.cell(dash, 0, 3, "BOS/CHOCH",  text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(bcCount), text_color=color.yellow, text_size=size.small)
+    table.cell(dash, 0, 4, "ATR",         text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(atr, "#.##"), text_color=color.yellow, text_size=size.small)
+    table.cell(dash, 0, 5, "LTF Bias",   text_color=color.white, text_size=size.small)
+    ltfTxt = ltfLastBias == 1 ? "BULL" : ltfLastBias == -1 ? "BEAR" : "NONE"
+    ltfCol = ltfLastBias == 1 ? color.green : ltfLastBias == -1 ? color.red : color.gray
+    table.cell(dash, 1, 5, ltfTxt, text_color=ltfCol, text_size=size.small)

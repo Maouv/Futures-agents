@@ -3,5 +3,13 @@
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT"
-  ]
+  ],
+  "trading": {
+    "execution_mode": "testnet",
+    "leverage": 1,
+    "margin_type": "isolated",
+    "risk_per_trade_usd": 5.0,
+    "risk_reward_ratio": 1.0,
+    "max_open_positions": 1
+  }
 }

@@ -1,10 +1,10 @@
 """
-pairs.py — Loader untuk konfigurasi trading pairs dari pairs.json.
+pairs.py — Loader untuk konfigurasi trading pairs dan params dari pairs.json.
 Tinggal edit pairs.json di root project, restart bot, langsung aktif.
 """
 import json
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from src.utils.logger import logger
 
@@ -50,3 +50,33 @@ def load_pairs() -> List[str]:
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in pairs.json: {e}. Falling back to BTCUSDT only.")
         return ["BTCUSDT"]
+
+
+DEFAULT_TRADING = {
+    "execution_mode": "paper",
+    "leverage": 10,
+    "margin_type": "isolated",
+    "risk_per_trade_usd": 10.0,
+    "risk_reward_ratio": 2.0,
+    "max_open_positions": 1,
+}
+
+
+def load_trading_config() -> Dict:
+    """
+    Load trading params dari pairs.json ["trading"] section.
+    Fallback ke DEFAULT_TRADING jika section tidak ada.
+    """
+    if not PAIRS_FILE.exists():
+        return DEFAULT_TRADING.copy()
+
+    try:
+        with open(PAIRS_FILE, "r") as f:
+            data = json.load(f)
+
+        trading = data.get("trading", {})
+        config = {**DEFAULT_TRADING, **trading}
+        return config
+
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_TRADING.copy()
