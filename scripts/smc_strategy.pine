@@ -1,19 +1,20 @@
-//@version=6
+//@version=5
 strategy("SMC OB+FVG+BOS/CHOCH", overlay=true, initial_capital=1000,
      default_qty_type=strategy.percent_of_equity, default_qty_value=10,
-     commission_type=strategy.commission.cash_per_contract, commission_value=0.04,
-     slippage=1, margin_long=100, margin_short=100)
+     commission_type=strategy.commission.percent, commission_value=0.04, slippage=1)
 
-// ── Inputs ──────────────────────────────────────────────────────────────────
-swOB   = input.int(5,  "Swing Length OB")
-swBOS  = input.int(10, "Swing Length BOS")
-rr     = input.float(2.0, "Risk:Reward", minval=0.5, step=0.1)
-tfH4   = input.timeframe("240", "H4 Trend TF")
-tfH1   = input.timeframe("60",  "H1 Signal TF")
-tfLTF  = input.timeframe("15",  "LTF Confirm TF")
+// ── Inputs ──
+swOB  = input.int(5,  "Swing Length OB")
+swBOS = input.int(10, "Swing Length BOS")
+rr    = input.float(2.0, "Risk:Reward", minval=0.5, step=0.1)
+tfH4  = input.timeframe("240", "H4 Trend TF")
+tfH1  = input.timeframe("60",  "H1 Signal TF")
+tfLTF = input.timeframe("15",  "LTF Confirm TF")
 
-// ── FVG Detection ───────────────────────────────────────────────────────────
-// Port: _smc_core.fvg() — Bullish: high[2]<low & bull candle, Bearish: low[2]>high & bear
+// ══════════════════════════════════════════════════════════════════
+// FVG — Port dari _smc_core.fvg()
+// Bullish: high[2] < low & bull candle | Bearish: low[2] > high & bear candle
+// ══════════════════════════════════════════════════════════════════
 type FVG
     int    barIdx
     float  top
@@ -30,7 +31,7 @@ if bullFVG or bearFVG
     b = bullFVG ? 1 : -1
     t = bullFVG ? low : low[2]
     bt = bullFVG ? high[2] : high
-    array.push(fvgs, FVG.new(bar_index-1, t, bt, b, false))
+    array.push(fvgs, FVG.new(bar_index - 1, t, bt, b, false))
 
 if array.size(fvgs) > 0
     for i = array.size(fvgs) - 1 to 0
@@ -43,14 +44,14 @@ if array.size(fvgs) > 0
 
 if array.size(fvgs) > 40
     tmp = array.new<FVG>()
-    for i = array.size(fvgs)-1 to math.max(0, array.size(fvgs)-40)
+    for i = array.size(fvgs) - 1 to math.max(0, array.size(fvgs) - 40)
         array.push(tmp, array.get(fvgs, i))
     fvgs := tmp
 
 hasBullFVG = false
 hasBearFVG = false
 if array.size(fvgs) > 0
-    for i = 0 to array.size(fvgs)-1
+    for i = 0 to array.size(fvgs) - 1
         f = array.get(fvgs, i)
         if not f.mitigated
             if f.bias == 1
@@ -58,8 +59,10 @@ if array.size(fvgs) > 0
             else
                 hasBearFVG := true
 
-// ── BOS/CHOCH Detection ─────────────────────────────────────────────────────
-// Port: _smc_core.bos_choch() — 4-swing pattern matching
+// ══════════════════════════════════════════════════════════════════
+// BOS/CHOCH — Port dari _smc_core.bos_choch()
+// 4-swing pattern: BOS = continuation, CHOCH = reversal
+// ══════════════════════════════════════════════════════════════════
 type BC
     int    barIdx
     string stype
@@ -68,31 +71,58 @@ type BC
     bool   broken
 
 var array<BC> bcs = array.new<BC>()
-var float s1=na, s2=na, s3=na, s4=na
-var int   b1=0,  b2=0,  b3=0,  b4=0
-var float l1=na, l2=na, l3=na, l4=na
+
+var float s1 = na
+var float s2 = na
+var float s3 = na
+var float s4 = na
+var int   b1 = 0
+var int   b2 = 0
+var int   b3 = 0
+var int   b4 = 0
+var float l1 = na
+var float l2 = na
+var float l3 = na
+var float l4 = na
 
 pHi = ta.pivothigh(high, swBOS, swBOS)
 pLo = ta.pivotlow(low, swBOS, swBOS)
 
 if not na(pHi)
-    s4:=s3; b4:=b3; l4:=l3
-    s3:=s2; b3:=b2; l3:=l2
-    s2:=s1; b2:=b1; l2:=l1
-    s1:=1.0; b1:=bar_index-swBOS; l1:=pHi
+    s4 := s3
+    b4 := b3
+    l4 := l3
+    s3 := s2
+    b3 := b2
+    l3 := l2
+    s2 := s1
+    b2 := b1
+    l2 := l1
+    s1 := 1.0
+    b1 := bar_index - swBOS
+    l1 := pHi
 
 if not na(pLo)
-    s4:=s3; b4:=b3; l4:=l3
-    s3:=s2; b3:=b2; l3:=l2
-    s2:=s1; b2:=b1; l2:=l1
-    s1:=-1.0; b1:=bar_index-swBOS; l1:=pLo
+    s4 := s3
+    b4 := b3
+    l4 := l3
+    s3 := s2
+    b3 := b2
+    l3 := l2
+    s2 := s1
+    b2 := b1
+    l2 := l1
+    s1 := -1.0
+    b1 := bar_index - swBOS
+    l1 := pLo
 
 ok = not na(s1) and not na(s2) and not na(s3) and not na(s4)
 if ok
-    bullBOS = s4==-1 and s3==1 and s2==-1 and s1==1 and l4<l2 and l2<l3 and l3<l1
-    bearBOS = s4==1 and s3==-1 and s2==1 and s1==-1 and l4>l2 and l2>l3 and l3>l1
-    bullCH  = s4==-1 and s3==1 and s2==-1 and s1==1 and l1>l3 and l3>l4 and l4>l2
-    bearCH  = s4==1 and s3==-1 and s2==1 and s1==-1 and l1<l3 and l3<l4 and l4<l2
+    bullBOS = s4 == -1 and s3 == 1 and s2 == -1 and s1 == 1 and l4 < l2 and l2 < l3 and l3 < l1
+    bearBOS = s4 == 1 and s3 == -1 and s2 == 1 and s1 == -1 and l4 > l2 and l2 > l3 and l3 > l1
+    bullCH  = s4 == -1 and s3 == 1 and s2 == -1 and s1 == 1 and l1 > l3 and l3 > l4 and l4 > l2
+    bearCH  = s4 == 1 and s3 == -1 and s2 == 1 and s1 == -1 and l1 < l3 and l3 < l4 and l4 < l2
+
     if bullBOS
         array.push(bcs, BC.new(b2, "BOS", 1, l3, false))
     if bearBOS
@@ -101,29 +131,34 @@ if ok
         array.push(bcs, BC.new(b2, "CHOCH", 1, l3, false))
     if bearCH
         array.push(bcs, BC.new(b2, "CHOCH", -1, l3, false))
-    s4:=na; b4:=na; l4:=na
+
+    s4 := na
+    b4 := na
+    l4 := na
 
 if array.size(bcs) > 0
-    for i = array.size(bcs)-1 to 0
+    for i = array.size(bcs) - 1 to 0
         c = array.get(bcs, i)
         if not c.broken
-            if c.bias==1 and close>c.level
-                c.broken:=true
-            else if c.bias==-1 and close<c.level
-                c.broken:=true
+            if c.bias == 1 and close > c.level
+                c.broken := true
+            else if c.bias == -1 and close < c.level
+                c.broken := true
 
-// Last broken BC within lookback
 lastBC(lookback) =>
     r = BC.new(na, "NONE", 0, na, false)
-    for i = array.size(bcs)-1 to 0
+    for i = array.size(bcs) - 1 to 0
         c = array.get(bcs, i)
-        if c.broken and bar_index-c.barIdx<=lookback
-            r:=c
+        if c.broken and bar_index - c.barIdx <= lookback
+            r := c
             break
     r
 
-// ── Order Block Detection ───────────────────────────────────────────────────
-// Port: _smc_core.ob() — Bullish: close>swingHi → lowest-low candle; Bearish: opposite
+// ══════════════════════════════════════════════════════════════════
+// ORDER BLOCKS — Port dari _smc_core.ob()
+// Bullish: close > swingHi → OB = lowest-low candle between
+// Bearish: close < swingLo → OB = highest-high candle between
+// ══════════════════════════════════════════════════════════════════
 type OB
     int    barIdx
     float  top
@@ -133,128 +168,167 @@ type OB
     bool   dead
 
 var array<OB> obs = array.new<OB>()
-var float lastSwHi=na, lastSwLo=na
-var int   lastSwHiBar=na, lastSwLoBar=na
-var bool  hiX=false, loX=false
+
+var float lastSwHi = na
+var float lastSwLo = na
+var int   lastSwHiBar = na
+var int   lastSwLoBar = na
+var bool  hiX = false
+var bool  loX = false
 
 obPHi = ta.pivothigh(high, swOB, swOB)
 obPLo = ta.pivotlow(low, swOB, swOB)
 
 if not na(obPHi)
-    lastSwHi:=obPHi; lastSwHiBar:=bar_index-swOB; hiX:=false
+    lastSwHi := obPHi
+    lastSwHiBar := bar_index - swOB
+    hiX := false
+
 if not na(obPLo)
-    lastSwLo:=obPLo; lastSwLoBar:=bar_index-swOB; loX:=false
+    lastSwLo := obPLo
+    lastSwLoBar := bar_index - swOB
+    loX := false
 
 // Bullish OB: close breaks above last swing high
-if not hiX and not na(lastSwHi) and close>lastSwHi
-    hiX:=true
-    ot=high[1]; ob_=low[1]; oi=bar_index-1
-    st = math.max(nz(lastSwHiBar,bar_index-swOB)+1, bar_index-swOB*2)
-    for j = st to bar_index-1
-        if low[j]<ob_
-            ob_:=low[j]; ot:=high[j]; oi:=j
-    array.push(obs, OB.new(oi, ot, ob_, 1, false, false))
+if not hiX and not na(lastSwHi) and close > lastSwHi
+    hiX := true
+    ot = high[1]
+    obB = low[1]
+    oi = bar_index - 1
+    st = math.max(nz(lastSwHiBar, bar_index - swOB) + 1, bar_index - swOB * 2)
+    for j = st to bar_index - 1
+        if low[j] < obB
+            obB := low[j]
+            ot := high[j]
+            oi := j
+    array.push(obs, OB.new(oi, ot, obB, 1, false, false))
 
 // Bearish OB: close breaks below last swing low
-if not loX and not na(lastSwLo) and close<lastSwLo
-    loX:=true
-    ot=high[1]; ob_=low[1]; oi=bar_index-1
-    st = math.max(nz(lastSwLoBar,bar_index-swOB)+1, bar_index-swOB*2)
-    for j = st to bar_index-1
-        if high[j]>ot
-            ot:=high[j]; ob_:=low[j]; oi:=j
-    array.push(obs, OB.new(oi, ot, ob_, -1, false, false))
+if not loX and not na(lastSwLo) and close < lastSwLo
+    loX := true
+    ot = high[1]
+    obB = low[1]
+    oi = bar_index - 1
+    st = math.max(nz(lastSwLoBar, bar_index - swOB) + 1, bar_index - swOB * 2)
+    for j = st to bar_index - 1
+        if high[j] > ot
+            ot := high[j]
+            obB := low[j]
+            oi := j
+    array.push(obs, OB.new(oi, ot, obB, -1, false, false))
 
 // Mitigation + invalidation
-if array.size(obs)>0
-    for i = array.size(obs)-1 to 0
+if array.size(obs) > 0
+    for i = array.size(obs) - 1 to 0
         o = array.get(obs, i)
         if not o.dead
             if not o.mitigated
-                if o.bias==1 and low<o.bottom
-                    o.mitigated:=true
-                else if o.bias==-1 and high>o.top
-                    o.mitigated:=true
+                if o.bias == 1 and low < o.bottom
+                    o.mitigated := true
+                else if o.bias == -1 and high > o.top
+                    o.mitigated := true
             if o.mitigated
-                if o.bias==1 and high>o.top
-                    o.dead:=true
-                else if o.bias==-1 and low<o.bottom
-                    o.dead:=true
+                if o.bias == 1 and high > o.top
+                    o.dead := true
+                else if o.bias == -1 and low < o.bottom
+                    o.dead := true
 
-if array.size(obs)>25
+if array.size(obs) > 25
     tmp = array.new<OB>()
-    for i = array.size(obs)-1 to math.max(0, array.size(obs)-25)
+    for i = array.size(obs) - 1 to math.max(0, array.size(obs) - 25)
         o = array.get(obs, i)
         if not o.dead
             array.push(tmp, o)
-    obs:=tmp
+    obs := tmp
 
-// Nearest active OBs overlapping current price
 nearBullOB() =>
     r = OB.new(na, na, na, 0, false, false)
-    for i = 0 to array.size(obs)-1
+    for i = 0 to array.size(obs) - 1
         o = array.get(obs, i)
-        if o.bias==1 and not o.dead and not o.mitigated
-            if low<=o.top and high>=o.bottom
-                if na(r.top) or o.top>r.top
-                    r:=o
+        if o.bias == 1 and not o.dead and not o.mitigated
+            if low <= o.top and high >= o.bottom
+                if na(r.top) or o.top > r.top
+                    r := o
     r
 
 nearBearOB() =>
     r = OB.new(na, na, na, 0, false, false)
-    for i = 0 to array.size(obs)-1
+    for i = 0 to array.size(obs) - 1
         o = array.get(obs, i)
-        if o.bias==-1 and not o.dead and not o.mitigated
-            if low<=o.top and high>=o.bottom
-                if na(r.bottom) or o.bottom<r.bottom
-                    r:=o
+        if o.bias == -1 and not o.dead and not o.mitigated
+            if low <= o.top and high >= o.bottom
+                if na(r.bottom) or o.bottom < r.bottom
+                    r := o
     r
 
-// ── H4 Trend Bias ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// H4 TREND BIAS — Port dari trend_agent.py
+// ══════════════════════════════════════════════════════════════════
 var int   h4Bias = 0
-var float h4Hi = na, h4Lo = na
-var bool  h4HiX = false, h4LoX = false
+var float h4Hi = na
+var float h4Lo = na
+var bool  h4HiX = false
+var bool  h4LoX = false
 
 h4PHi = request.security(syminfo.tickerid, tfH4, ta.pivothigh(high, swBOS, swBOS), lookahead=barmerge.lookahead_off)
 h4PLo = request.security(syminfo.tickerid, tfH4, ta.pivotlow(low, swBOS, swBOS), lookahead=barmerge.lookahead_off)
 h4C   = request.security(syminfo.tickerid, tfH4, close, lookahead=barmerge.lookahead_off)
 
 if not na(h4PHi)
-    h4Hi:=h4PHi; h4HiX:=false
-if not na(h4PLo)
-    h4Lo:=h4PLo; h4LoX:=false
-if not h4HiX and h4C>h4Hi
-    h4HiX:=true; h4Bias:=1
-if not h4LoX and h4C<h4Lo
-    h4LoX:=true; h4Bias:=-1
+    h4Hi := h4PHi
+    h4HiX := false
 
-// ── LTF Confirmation ────────────────────────────────────────────────────────
+if not na(h4PLo)
+    h4Lo := h4PLo
+    h4LoX := false
+
+if not h4HiX and h4C > h4Hi
+    h4HiX := true
+    h4Bias := 1
+
+if not h4LoX and h4C < h4Lo
+    h4LoX := true
+    h4Bias := -1
+
+// ══════════════════════════════════════════════════════════════════
+// LTF CONFIRMATION — Port dari confirmation_agent.py
+// ══════════════════════════════════════════════════════════════════
 var int   ltfBias = 0
-var float ltfHi = na, ltfLo = na
-var bool  ltfHiX = false, ltfLoX = false
+var float ltfHi = na
+var float ltfLo = na
+var bool  ltfHiX = false
+var bool  ltfLoX = false
 
 ltPHi = request.security(syminfo.tickerid, tfLTF, ta.pivothigh(high, swOB, swOB), lookahead=barmerge.lookahead_off)
 ltPLo = request.security(syminfo.tickerid, tfLTF, ta.pivotlow(low, swOB, swOB), lookahead=barmerge.lookahead_off)
 ltC   = request.security(syminfo.tickerid, tfLTF, close, lookahead=barmerge.lookahead_off)
 
 if not na(ltPHi)
-    ltfHi:=ltPHi; ltfHiX:=false
+    ltfHi := ltPHi
+    ltfHiX := false
+
 if not na(ltPLo)
-    ltfLo:=ltPLo; ltfLoX:=false
-if not ltfHiX and ltC>ltfHi
-    ltfHiX:=true; ltfBias:=1
-if not ltfLoX and ltC<ltfLo
-    ltfLoX:=true; ltfBias:=-1
+    ltfLo := ltPLo
+    ltfLoX := false
 
-// ── Entry Logic ─────────────────────────────────────────────────────────────
-// LONG: H4 bull + H1 bull OB + H1 bull BC + LTF confirm
-// SHORT: H4 bear + H1 bear OB + H1 bear BC + LTF confirm
-bOB  = nearBullOB()
-sOB  = nearBearOB()
-rBC  = lastBC(20)
+if not ltfHiX and ltC > ltfHi
+    ltfHiX := true
+    ltfBias := 1
 
-longOK  = h4Bias==1 and bOB.bias==1 and rBC.bias==1 and rBC.broken and (ltfBias==1 or hasBullFVG) and strategy.position_size==0
-shortOK = h4Bias==-1 and sOB.bias==-1 and rBC.bias==-1 and rBC.broken and (ltfBias==-1 or hasBearFVG) and strategy.position_size==0
+if not ltfLoX and ltC < ltfLo
+    ltfLoX := true
+    ltfBias := -1
+
+// ══════════════════════════════════════════════════════════════════
+// ENTRY — LONG: H4 bull + H1 bull OB + H1 bull BC + LTF confirm
+//       — SHORT: H4 bear + H1 bear OB + H1 bear BC + LTF confirm
+// ══════════════════════════════════════════════════════════════════
+bOB = nearBullOB()
+sOB = nearBearOB()
+rBC = lastBC(20)
+
+longOK  = h4Bias == 1 and bOB.bias == 1 and rBC.bias == 1 and rBC.broken and (ltfBias == 1 or hasBullFVG) and strategy.position_size == 0
+shortOK = h4Bias == -1 and sOB.bias == -1 and rBC.bias == -1 and rBC.broken and (ltfBias == -1 or hasBearFVG) and strategy.position_size == 0
 
 if longOK
     entry = (bOB.top + bOB.bottom) / 2.0
@@ -270,29 +344,30 @@ if shortOK
     strategy.entry("S", strategy.short)
     strategy.exit("Sx", "S", limit=tp, stop=sl)
 
-// ── Plotting ────────────────────────────────────────────────────────────────
-bgcolor(h4Bias==1 ? color.new(color.green,95) : h4Bias==-1 ? color.new(color.red,95) : na)
+// ══════════════════════════════════════════════════════════════════
+// PLOTTING
+// ══════════════════════════════════════════════════════════════════
+bgcolor(h4Bias == 1 ? color.new(color.green, 95) : h4Bias == -1 ? color.new(color.red, 95) : na)
 
 var label[] pL = array.new<label>()
 if barstate.islast
     for l in pL
         label.delete(l)
     array.clear(pL)
-    // BOS/CHOCH labels
-    for i = 0 to array.size(bcs)-1
+    for i = 0 to array.size(bcs) - 1
         c = array.get(bcs, i)
-        if c.broken and bar_index-c.barIdx<150
-            t = c.stype + (c.bias==1 ? " ↑" : " ↓")
-            cl = c.bias==1 ? color.teal : color.orange
+        if c.broken and bar_index - c.barIdx < 150
+            t = c.stype + (c.bias == 1 ? " ▲" : " ▼")
+            cl = c.bias == 1 ? color.teal : color.orange
             array.push(pL, label.new(c.barIdx, c.level, t, style=label.style_label_down, color=cl, textcolor=color.white))
-    // OB boxes
-    for i = 0 to array.size(obs)-1
+    for i = 0 to array.size(obs) - 1
         o = array.get(obs, i)
-        if not o.dead and bar_index-o.barIdx<150
-            bc = o.bias==1 ? color.new(color.teal,82) : color.new(color.orange,82)
-            box.new(o.barIdx, o.top, bar_index, o.bottom, bgcolor=bc, border_color=o.bias==1?color.teal:color.orange)
-            lb = o.bias==1 ? "OB+" : "OB-"
-            array.push(pL, label.new(o.barIdx, o.top, lb, style=label.style_label_down, color=o.mitigated?color.gray:(o.bias==1?color.teal:color.orange), textcolor=color.white))
+        if not o.dead and bar_index - o.barIdx < 150
+            bc = o.bias == 1 ? color.new(color.teal, 82) : color.new(color.orange, 82)
+            box.new(o.barIdx, o.top, bar_index, o.bottom, bgcolor=bc, border_color=o.bias == 1 ? color.teal : color.orange)
+            lb = o.bias == 1 ? "OB+" : "OB-"
+            oc = o.mitigated ? color.gray : o.bias == 1 ? color.teal : color.orange
+            array.push(pL, label.new(o.barIdx, o.top, lb, style=label.style_label_down, color=oc, textcolor=color.white))
 
 plotshape(longOK, title="Long", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
 plotshape(shortOK, title="Short", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
