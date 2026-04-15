@@ -6,12 +6,14 @@ WAJIB ada fallback ke rule-based jika API down.
 from pydantic import BaseModel
 from typing import Optional
 import json
+import time
 import openai
 from src.config.settings import settings
 from src.agents.math.trend_agent import TrendResult
 from src.agents.math.reversal_agent import ReversalResult
 from src.agents.math.confirmation_agent import ConfirmationResult
 from src.utils.logger import logger
+from src.utils.llm_rate_limiter import cerebras_limiter
 
 
 class AnalystDecision(BaseModel):
@@ -58,6 +60,17 @@ def _rule_based_fallback(
     )
 
 
+def _is_429(exc: Exception) -> bool:
+    """Cek apakah exception adalah 429 rate limit error dari LLM API."""
+    exc_str = str(exc).lower()
+    if '429' in exc_str or 'rate_limit' in exc_str or 'rate limit' in exc_str:
+        return True
+    # openai SDK wraps HTTP errors dengan status_code attribute
+    if hasattr(exc, 'status_code') and exc.status_code == 429:
+        return True
+    return False
+
+
 def run_analyst(
     trend: TrendResult,
     reversal: ReversalResult,
@@ -96,6 +109,7 @@ Respond in JSON only:
 {{"action": "LONG|SHORT|SKIP", "confidence": 0-100, "reasoning": "brief explanation"}}"""
 
     try:
+        cerebras_limiter.acquire()
         response = client.chat.completions.create(
             model=settings.CEREBRAS_MODEL,
             messages=[{"role": "user", "content": prompt}],
@@ -103,6 +117,7 @@ Respond in JSON only:
             response_format={"type": "json_object"},
             max_tokens=200,
         )
+        cerebras_limiter.release()
         raw = response.choices[0].message.content
         data = json.loads(raw)
         return AnalystDecision(
@@ -112,5 +127,38 @@ Respond in JSON only:
             source='llm',
         )
     except Exception as e:
-        logger.warning(f"[AnalystAgent] API error: {e}. Falling back to rule-based.")
+        cerebras_limiter.release()
+        if _is_429(e):
+            for attempt in range(settings.LLM_RETRY_ON_429):
+                backoff = 2 ** attempt  # 1s, 2s, 4s, ...
+                logger.warning(f"[AnalystAgent] 429 rate limited. Retry {attempt + 1}/{settings.LLM_RETRY_ON_429} after {backoff}s")
+                time.sleep(backoff)
+                try:
+                    cerebras_limiter.acquire()
+                    response = client.chat.completions.create(
+                        model=settings.CEREBRAS_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.0,
+                        response_format={"type": "json_object"},
+                        max_tokens=200,
+                    )
+                    cerebras_limiter.release()
+                    raw = response.choices[0].message.content
+                    data = json.loads(raw)
+                    return AnalystDecision(
+                        action=data.get('action', 'SKIP'),
+                        confidence=int(data.get('confidence', 50)),
+                        reasoning=data.get('reasoning', ''),
+                        source='llm',
+                    )
+                except Exception as retry_e:
+                    cerebras_limiter.release()
+                    if _is_429(retry_e):
+                        continue  # Retry lagi
+                    logger.warning(f"[AnalystAgent] Retry {attempt + 1} error: {retry_e}. Falling back to rule-based.")
+                    return _rule_based_fallback(trend, reversal, confirmation)
+            # Semua retry habis
+            logger.warning(f"[AnalystAgent] {settings.LLM_RETRY_ON_429} retries exhausted. Falling back to rule-based.")
+        else:
+            logger.warning(f"[AnalystAgent] API error: {e}. Falling back to rule-based.")
         return _rule_based_fallback(trend, reversal, confirmation)

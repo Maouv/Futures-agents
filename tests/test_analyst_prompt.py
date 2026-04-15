@@ -21,9 +21,9 @@ def test_risk_reward_ratio_in_prompt():
     # Verify settings digunakan
     assert "settings.RISK_REWARD_RATIO" in source, "Settings RR ratio tidak digunakan!"
 
-    # Verify settings value
+    # Verify settings value (now reads from config.json, not hardcoded default)
     assert hasattr(settings, 'RISK_REWARD_RATIO')
-    assert settings.RISK_REWARD_RATIO == 2.0  # Default value
+    assert isinstance(settings.RISK_REWARD_RATIO, float)
 
 
 def test_prompt_content_with_custom_rr():

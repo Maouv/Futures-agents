@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from src.agents.math.risk_agent import RiskAgent
 from src.indicators.luxalgo_smc import OrderBlock
+from src.config.settings import settings
 
 
 class TestRiskAgentPositionSize:
@@ -44,14 +45,15 @@ class TestRiskAgentPositionSize:
 
         # Verify position size formula
         risk_distance = abs(result.entry_price - result.sl_price)
-        expected_position_size = 10.0 / risk_distance  # risk_usd / risk_distance
+        risk_usd = settings.RISK_PER_TRADE_USD  # From config.json
+        expected_position_size = risk_usd / risk_distance
 
         # Position size harus sama dengan expected (tanpa leverage)
         assert result.position_size == pytest.approx(expected_position_size, rel=0.01)
 
         # Verify actual risk = target risk
         actual_risk = result.position_size * risk_distance
-        assert actual_risk == pytest.approx(10.0, rel=0.01)
+        assert actual_risk == pytest.approx(risk_usd, rel=0.01)
 
     def test_leverage_does_not_affect_position_size(self):
         """
@@ -87,7 +89,7 @@ class TestRiskAgentPositionSize:
         # Position size harus sama meski leverage berbeda
         # (margin required akan berbeda, tapi position size sama)
         risk_distance = abs(result_10x.entry_price - result_10x.sl_price)
-        expected_position_size = 10.0 / risk_distance
+        expected_position_size = settings.RISK_PER_TRADE_USD / risk_distance
 
         assert result_10x.position_size == pytest.approx(expected_position_size, rel=0.01)
 

@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from src.config.settings import settings
 from src.data.storage import init_db, migrate_db, PaperTrade, get_session
 from src.data.ohlcv_fetcher import fetch_ohlcv, log_weight_summary
-from src.config.pairs import load_pairs
+from src.config.config_loader import load_pairs
 from src.agents.math.trend_agent import TrendAgent
 from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.confirmation_agent import ConfirmationAgent
@@ -29,7 +29,7 @@ from src.utils.kill_switch import check_kill_switch
 class TradingBot:
     """
     Orchestrator utama dengan proper encapsulation.
-    Multi-pair sequential loop — pairs di-load dari pairs.json.
+    Multi-pair sequential loop — pairs di-load dari config.json.
     """
 
     def __init__(self):
@@ -122,10 +122,6 @@ class TradingBot:
                 current_price = float(df_15m['close'].iloc[-1])
                 decision = run_analyst(trend, reversal, confirmation, current_price, symbol)
                 logger.info(f"{symbol}: Analyst={decision.action} (confidence: {decision.confidence}) [{decision.source}]")
-
-                # Throttle: jeda 1 detik antar LLM call untuk aman dari RPM limit
-                if len(self.pairs) > 5:
-                    time.sleep(1.0)
 
                 # ── 5. Risk & Execution ────────────────────────────────────
                 if decision.action in ('LONG', 'SHORT') and decision.confidence >= 60:

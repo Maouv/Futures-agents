@@ -1,40 +1,40 @@
 # Futures Agents
 
-Bot trading crypto futures multi-agent yang jalan 24/7 di VPS. Trade Binance USD-M Futures via ccxt. Pipeline: Math Agents (pure Python) → LLM Analyst (Cerebras) → optional RL filter (ONNX).
+Multi-agent crypto futures trading bot running 24/7 on a VPS. Trades Binance USD-M Futures via ccxt. Pipeline: Math Agents (pure Python) → LLM Analyst (Cerebras) → optional RL filter (ONNX).
 
-**Bahasa**: Gunakan Bahasa Indonesia untuk semua komunikasi dan penjelasan. English hanya untuk code, identifier, dan technical terms.
+**Language**: Use English for all communication and explanations. Indonesian only when explicitly requested.
 
 ---
 
-## Arsitektur
+## Architecture
 
 ```
 src/main.py                      → Orchestrator — 15-min APScheduler cycle + Telegram
 src/config/
-  settings.py                    → Pydantic Settings — SINGLE SOURCE OF TRUTH semua config
-  pairs.py                        → Load pairs dari pairs.json
+  settings.py                    → Pydantic Settings — secrets from .env + @property delegates to config_loader
+  config_loader.py                → Load all config from config.json (pairs, system, trading, llm, secrets)
 src/data/
-  storage.py                      → SQLAlchemy models (OHLCV + PaperTrade) + session factory
-  ohlcv_fetcher.py                → REST API fetcher + gap detector + session filter
-  ws_user_stream.py               → User Data WebSocket (live mode only, order updates)
-src/agents/math/                  → Pure Python — DILARANG panggil LLM di sini
-  base_agent.py                   → BaseAgent ABC — semua agent turun dari sini
-  trend_agent.py                  → H4 BOS/CHOCH → TrendResult
-  reversal_agent.py               → H1 SMC (OB+FVG) → ReversalResult
-  confirmation_agent.py           → 15m validation → ConfirmationResult
-  risk_agent.py                   → ATR SL/TP + fixed USD sizing → RiskResult
-  execution_agent.py              → Paper: INSERT DB | Live: Limit + Algo SL/TP → ExecutionResult
-  sltp_manager.py                 → Paper mode SL/TP check (high/low candle)
+  storage.py                     → SQLAlchemy models (OHLCV + PaperTrade) + session factory
+  ohlcv_fetcher.py               → REST API fetcher + gap detector + session filter
+  ws_user_stream.py              → User Data WebSocket (live mode only, order updates)
+src/agents/math/                 → Pure Python — NO LLM calls allowed here
+  base_agent.py                  → BaseAgent ABC — all agents inherit from this
+  trend_agent.py                 → H4 BOS/CHOCH → TrendResult
+  reversal_agent.py              → H1 SMC (OB+FVG) → ReversalResult
+  confirmation_agent.py          → 15m validation → ConfirmationResult
+  risk_agent.py                  → ATR SL/TP + fixed USD sizing → RiskResult
+  execution_agent.py             → Paper: INSERT DB | Live: Limit + Algo SL/TP → ExecutionResult
+  sltp_manager.py                → Paper mode SL/TP check (high/low candle)
 src/agents/llm/
-  analyst_agent.py                → Cerebras Qwen-3, fallback rule-based jika API down → AnalystDecision
-  commander_agent.py              → Groq Llama-3.1 — Telegram command parser
-  concierge_agent.py              → Groq Llama-3.1 — chat mode, concurrency locked
+  analyst_agent.py               → Cerebras Qwen-3, rule-based fallback if API down → AnalystDecision
+  commander_agent.py             → Groq Llama-3.1 — Telegram command parser
+  concierge_agent.py             → Groq Llama-3.1 — chat mode, concurrency locked
 src/indicators/
-  _smc_core.py                    → Internal SMC logic (OB, FVG, BOS/CHOCH)
+  _smc_core.py                   → Internal SMC logic (OB, FVG, BOS/CHOCH)
   luxalgo_smc.py                  → Public API: detect_order_blocks(), detect_fvg(), detect_bos_choch()
   mean_reversion.py               → RSI + Bollinger Bands
   helpers.py                      → ATR, Swing High/Low
-src/rl/                           → RL filter — training di Colab, inference ONNX di VPS
+src/rl/                           → RL filter — training on Colab, ONNX inference on VPS
   environment.py                  → TradingEnvironment, 13 features, SKIP/ENTRY
   dqn_agent.py                    → DQN + Thompson Sampling, ONNX export
   inference.py                    → ONNX Runtime inference (VPS)
@@ -46,14 +46,27 @@ src/backtest/
   metrics.py                      → calculate_metrics() — SKIPPED excluded
 src/utils/
   exchange.py                     → Singleton ccxt factory + algo order helpers (place_algo_order, cancel_algo_order)
-  rate_limiter.py                 → Sliding window 800 req/min
+  rate_limiter.py                 → Sliding window 800 req/min (Binance)
+  llm_rate_limiter.py             → Semaphore + sliding window rate limiter (Cerebras/Groq LLM)
   kill_switch.py                  → Emergency stop
   logger.py                       → Loguru setup
 ```
 
+## Directory Structure (non-src)
+
+- `data/historical/` → CSV OHLCV per pair×timeframe (backtest input)
+- `data/rl_models/` → ONNX model + normalization params (VPS inference)
+- `data/rl_training/` → Signal CSV per pair×year (Colab training input)
+- `data/backtest_results/` → Backtest output
+- `tests/` → Pytest unit tests (CI-ready)
+- `scripts/` → Manual utility & test scripts (not for CI)
+- `docs/` → PRD, implementation plan, specs
+- `examples/` → RL environment demo
+- `logs/` → Runtime logs (auto-generated)
+
 ## Result Models (Pydantic)
 
-Setiap agent return model ini — jangan ngarang field lain:
+Each agent must return these models — do not invent extra fields:
 
 ```python
 TrendResult:       bias: int (-1/0/1), bias_label: str, confidence: float, reason: str
@@ -68,130 +81,166 @@ AnalystDecision:   action: str (LONG/SHORT/SKIP), confidence: int, reasoning: st
 
 ```
 PLACE:  place_algo_order(symbol, side, order_type, trigger_price, qty)
-        → POST /fapi/v1/algoOrder, algoType=CONDITIONAL, param=triggerPrice (BUKAN stopPrice)
-        → returns dict dengan key 'algoId' (BUKAN 'orderId')
+        → POST /fapi/v1/algoOrder, algoType=CONDITIONAL, param=triggerPrice (NOT stopPrice)
+        → returns dict with key 'algoId' (NOT 'orderId')
 
 CANCEL: cancel_algo_order(algoId, symbol)
         → DELETE /fapi/v1/algoOrder
-        → BUKAN exchange.cancel_order() — endpoint lama tidak bisa cancel algo
+        → NOT exchange.cancel_order() — old endpoint cannot cancel algo orders
 
-WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId BARU (bukan algoId)
-        → Fallback match: cari by symbol + side jika algoId tidak cocok
+WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
+        → Fallback match: find by symbol + side if algoId doesn't match
 ```
 
-## Cara Kerja
+## How It Works
 
-1. Setiap 15 menit (APScheduler, cron `0,15,30,45`), untuk setiap pair di `pairs.json`:
+1. Every 15 minutes (APScheduler, cron `0,15,30,45`), for each pair in `pairs.json`:
 2. `fetch_ohlcv()` → H4, H1, 15m → gap check → session filter (London/NY only)
-3. `TrendAgent(H4)` + `ReversalAgent(H1)` + `ConfirmationAgent(15m)` → sinyal mentah
-4. `AnalystAgent(LLM)` → keputusan LONG/SHORT/SKIP (fallback ke rule-based jika API down)
-5. [Opsional] RL filter via ONNX inference
-6. `RiskAgent` → SL/TP/size → `ExecutionAgent` → paper INSERT atau live order
-7. `sltp_manager` cek semua open paper trades pakai high/low candle
+3. `TrendAgent(H4)` + `ReversalAgent(H1)` + `ConfirmationAgent(15m)` → raw signals
+4. `AnalystAgent(LLM)` → LONG/SHORT/SKIP decision (rule-based fallback if API down)
+5. [Optional] RL filter via ONNX inference
+6. `RiskAgent` → SL/TP/size → `ExecutionAgent` → paper INSERT or live order
+7. `sltp_manager` checks all open paper trades using high/low candle
 
-## Konvensi
+## Conventions
 
-- **Result model**: Setiap agent return Pydantic BaseModel (bukan dict). Nama pattern: `XxxResult`
-- **Agent pattern**: Semua math agent extend `BaseAgent`, implement `run() → XxxResult`
-- **Config**: Satu source of truth di `settings.py`. Akses via `settings.XXX`, secret via `.get_secret_value()`. Jangan pakai `os.getenv()`
-- **Exchange**: Selalu `get_exchange()` dari `src/utils/exchange.py`. Jangan buat `ccxt.binanceusdm()` langsung
-- **Exit check**: Pakai candle **high/low**, bukan close (hindari look-ahead bias)
-- **SKIPPED trades**: Dikecualikan dari semua metric (win rate, profit factor, drawdown)
-- **LLM fallback**: Bot TIDAK BOLEH crash karena LLM down. `analyst_agent.py` selalu punya rule-based fallback
-- **SL/TP live**: 2x Algo Order (`STOP_MARKET` + `TAKE_PROFIT_MARKET`). WAJIB pakai `place_algo_order()` dari `exchange.py`
-- **Model**: Pakai `openai` SDK + `base_url`
-- **Position sizing**: Fixed USD (`RISK_PER_TRADE_USD`), bukan persen balance
-- **DB session**: Selalu pakai `get_session()` context manager. Jangan raw SQL
+- **Result model**: Each agent returns a Pydantic BaseModel (not dict). Naming pattern: `XxxResult`
+- **Agent pattern**: All math agents extend `BaseAgent`, implement `run() → XxxResult`
+- **Config**: `config.json` is single source of truth for all non-secret config. `settings.py` holds secrets from `.env` + `@property` delegates to `config_loader.py`. Access via `settings.XXX`
+- **Exchange**: Always use `get_exchange()` from `src/utils/exchange.py`. Don't create `ccxt.binanceusdm()` directly
+- **Exit check**: Use candle **high/low**, not close (avoid look-ahead bias)
+- **SKIPPED trades**: Excluded from all metrics (win rate, profit factor, drawdown)
+- **LLM fallback**: Bot MUST NOT crash when LLM is down. `analyst_agent.py` always has rule-based fallback
+- **SL/TP live**: 2x Algo Order (`STOP_MARKET` + `TAKE_PROFIT_MARKET`). MUST use `place_algo_order()` from `exchange.py`
+- **Model**: Use `openai` SDK + `base_url`
+- **Position sizing**: Fixed USD (`RISK_PER_TRADE_USD`), not percentage of balance
+- **DB session**: Always use `get_session()` context manager. No raw SQL
+- **New files must go to the correct directory** — if the target directory doesn't exist, create it first. Examples: test files → `tests/`, utility scripts → `scripts/`, new agents → `src/agents/math/` or `src/agents/llm/`, indicators → `src/indicators/`, data output → `data/<appropriate_subdir>/`
 
-## Cara Nambah Fitur Baru
+## How to Add a New Feature
 
-1. Tambah config di `src/config/settings.py` (field + default + `.env`)
-2. Kalau agent baru: buat file di `src/agents/math/`, extend `BaseAgent`, return Pydantic model
-3. Daftarkan agent di pipeline `src/main.py::TradingBot.run_trading_cycle()`
-4. Kalau indikator baru: buat di `src/indicators/`, panggil dari agent (bukan dari LLM)
-5. Tambah pair: edit `pairs.json` di root project, restart bot
-6. Update section ini jika arsitektur berubah
+1. Add config in `config.json` (system/trading/llm sections) + secrets in `.env`
+2. If new agent: create file in `src/agents/math/`, extend `BaseAgent`, return Pydantic model
+3. Register agent in pipeline `src/main.py::TradingBot.run_trading_cycle()`
+4. If new indicator: create in `src/indicators/`, call from agent (not from LLM)
+5. Add pair: edit `config.json` in project root, restart bot
+6. Update this section if architecture changes
 
 ## Gotcha / Known Issues
 
-- **Exchange singleton**: Setelah network error, panggil `reset_exchange()` — singleton menyimpan stale state
-- **SQLite WAL**: Enabled via PRAGMA. Jangan ubah ke DELETE mode — bisa corrupt di concurrent read/write
-- **DetachedInstanceError**: Akses atribut PaperTrade di luar session scope akan crash. Ambil semua nilai yang dibutuhkan sebelum session close
-- **Mode switch**: Kalau ganti `EXECUTION_MODE` tanpa restart, exchange instance masih pakai config lama. WAJIB restart
-- **`current_price` undefined**: Di beberapa path, `current_price` belum di-assign sebelum dipakai. Pastikan selalu ada fallback
+- **Exchange singleton**: After network error, call `reset_exchange()` — singleton stores stale state
+- **SQLite WAL**: Enabled via PRAGMA. Don't switch to DELETE mode — can corrupt under concurrent read/write
+- **DetachedInstanceError**: Accessing PaperTrade attributes outside session scope will crash. Fetch all needed values before session close
+- **Mode switch**: If changing `EXECUTION_MODE` without restart, exchange instance still uses old config. MUST restart
+- **`current_price` undefined**: In some paths, `current_price` is not assigned before use. Always ensure a fallback exists
 - **Binance error codes**:
-  | Code | Penyebab | Handling |
-  |------|----------|----------|
-  | -4137 | Stop sudah ter-trigger (buy price above trigger) | Skip order |
-  | -4120 | Pakai `/fapi/v1/order` untuk algo order | Pakai `/fapi/v1/algoOrder` |
-- **Order status `closed`**: Binance bisa return `closed` selain `filled`. Kedua-duanya = tereksekusi
-- **Naive datetime di SQLite**: `PaperTrade.entry_timestamp` dari DB tidak punya timezone. Harus `.replace(tzinfo=timezone.utc)` sebelum dikurangi `datetime.now(timezone.utc)`
-- **ccxt version**: Pakai `4.2.86`. JANGAN upgrade — versi baru nge-block testnet untuk futures. Algo API dipanggil manual via `requests`
-- **Rate limiter**: Max 800 req/min. Kalau >5 pairs, ada 1 detik throttle antar LLM call
-- **`onchain_fetcher.py`**: Placeholder, tidak diimplementasi. Jangan hapus tapi jangan pakai juga
-- **RL training**: HANYA di Google Colab (GPU T4). Jangan install torch/gymnasium/SB3 di VPS — akan OOM
-- **Reconciliation symbol format**: `exchange.fetch_positions()` return unified symbol `'BTC/USDT:USDT'`. Ambil raw symbol dari `pos['info']['symbol']` (`'BTCUSDT'`), BUKAN dari `pos['symbol']`
-- **RiskAgent ValueError**: `RiskAgent.run()` bisa raise ValueError kalau risk distance terlalu kecil. WAJIB di-try/except di caller — kalau tidak, seluruh trading cycle crash untuk semua pair
-- **OB Midpoint Overlap**: Jika harga sudah melewati OB midpoint di cycle berikutnya, `RiskAgent.run()` bisa raise `OverlapSkipError` (harga di luar OB zone → SKIP) atau adjust entry ke current_price (`entry_adjusted=True`). Live mode: adjusted entry pakai market order + langsung pasang SL/TP, bukan limit + PENDING_ENTRY
-- **SL/TP both hit**: Kalau dalam 1 candle SL DAN TP sama-sama kena, SL prioritas
+  | Code | Cause | Handling |
+  |------|-------|----------|
+  | -4137 | Stop already triggered (buy price above trigger) | Skip order |
+  | -4120 | Using `/fapi/v1/order` for algo order | Use `/fapi/v1/algoOrder` |
+- **Order status `closed`**: Binance can return `closed` besides `filled`. Both = executed
+- **Naive datetime in SQLite**: `PaperTrade.entry_timestamp` from DB has no timezone. Must `.replace(tzinfo=timezone.utc)` before subtracting `datetime.now(timezone.utc)`
+- **ccxt version**: Use `4.2.86`. Do NOT upgrade — newer versions block testnet for futures. Algo API called manually via `requests`
+- **Rate limiter**: Max 800 req/min (Binance). LLM rate limiting handled by `cerebras_limiter` in `llm_rate_limiter.py` (semaphore + RPM sliding window)
+- **`onchain_fetcher.py`**: Placeholder, not implemented. Don't delete but don't use either
+- **RL training**: ONLY on Google Colab (GPU T4). Don't install torch/gymnasium/SB3 on VPS — will OOM
+- **Reconciliation symbol format**: `exchange.fetch_positions()` returns unified symbol `'BTC/USDT:USDT'`. Get raw symbol from `pos['info']['symbol']` (`'BTCUSDT'`), NOT from `pos['symbol']`
+- **RiskAgent ValueError**: `RiskAgent.run()` can raise ValueError if risk distance is too small. MUST be try/excepted in caller — otherwise entire trading cycle crashes for all pairs
+- **OB Midpoint Overlap**: If price has passed OB midpoint in the next cycle, `RiskAgent.run()` can raise `OverlapSkipError` (price outside OB zone → SKIP) or adjust entry to current_price (`entry_adjusted=True`). Live mode: adjusted entry uses market order + immediately places SL/TP, not limit + PENDING_ENTRY
+- **SL/TP both hit**: If both SL and TP hit within the same candle, SL takes priority
 
 ## Config
 
-| Key | Type | Default | Required | Keterangan |
-|-----|------|---------|----------|------------|
-| `EXECUTION_MODE` | str | `paper` | Yes | `paper` = simulasi di DB, `live` = order sungguhan |
-| `USE_TESTNET` | bool | `False` | Yes | `True` = Binance Testnet |
-| `CONFIRM_MAINNET` | bool | `False` | Yes* | Wajib `True` kalau `USE_TESTNET=False` |
-| `BINANCE_API_KEY` | SecretStr | - | Live only | Wajib jika `live` + `USE_TESTNET=False` |
-| `BINANCE_TESTNET_KEY` | SecretStr | - | Live only | Wajib jika `live` + `USE_TESTNET=True` |
-| `CEREBRAS_API_KEY` | SecretStr | - | Yes | Analyst Agent |
-| `GROQ_API_KEY` | SecretStr | - | Yes | Commander + Concierge |
-| `TELEGRAM_BOT_TOKEN` | SecretStr | - | Yes | - |
-| `TELEGRAM_CHAT_ID` | str | - | Yes | Bisa negatif (group) |
-| `RISK_PER_TRADE_USD` | float | `10.0` | No | Risk per trade dalam USD (fixed) |
-| `RISK_REWARD_RATIO` | float | `2.0` | No | Jangan hardcode — baca dari settings |
-| `FUTURES_DEFAULT_LEVERAGE` | int | `10` | No | Range 1-125 |
-| `FUTURES_MARGIN_TYPE` | str | `isolated` | No | `isolated` atau `cross` |
-| `MAX_OPEN_POSITIONS` | int | `1` | No | Per pair, bukan global |
-| `ORDER_EXPIRY_CANDLES` | int | `48` | No | Limit order expire setelah N candle H1 |
-| `DISABLE_SESSION_FILTER` | bool | `True` | No | `True` = trade semua jam |
-| `CEREBRAS_MODEL` | str | `qwen-3-235b-...` | No | Model Analyst Agent |
-| `GROQ_MODEL` | str | `llama-3.1-8b-instant` | No | Model Commander + Concierge |
-| `LLM_FAST_TIMEOUT_SEC` | int | `45` | No | Timeout Cerebras & Groq |
-| `CONCIERGE_TIMEOUT_SEC` | int | `600` | No | Timeout Concierge |
+**`.env`** (secrets only):
 
-## Dependency Antar Modul
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `BINANCE_API_KEY/SECRET` | SecretStr | Live only | Production credentials |
+| `BINANCE_TESTNET_KEY/SECRET` | SecretStr | Live only | Testnet credentials |
+| `CEREBRAS_API_KEY` | SecretStr | Yes | Analyst Agent |
+| `GROQ_API_KEY` | SecretStr | Yes | Commander + Concierge |
+| `CONCIERGE_API_KEY` | SecretStr | No | Concierge (fallback to GROQ_API_KEY) |
+| `TELEGRAM_BOT_TOKEN` | SecretStr | Yes | Bot token |
+
+**`config.json`** (all non-secret config):
+
+| Section | Key | Type | Default | Description |
+|---------|-----|------|---------|-------------|
+| `system` | `execution_mode` | str | `paper` | `paper` = sim DB, `live` = real orders |
+| `system` | `use_testnet` | bool | `false` | `true` = Binance Testnet |
+| `system` | `confirm_mainnet` | bool | `false` | Must be `true` when live+mainnet |
+| `system` | `environment` | str | `production` | - |
+| `system` | `telegram_chat_id` | str | `""` | Can be negative (group) |
+| `system` | `binance_rest_url` | str | `https://fapi.binance.com` | - |
+| `system` | `binance_ws_url` | str | `wss://fstream.binance.com/ws` | - |
+| `system` | `binance_testnet_url` | str | `https://testnet.binancefuture.com` | - |
+| `system` | `binance_testnet_ws_url` | str | `wss://stream.binancefuture.com/ws` | - |
+| `trading` | `leverage` | int | `10` | Range 1-125 |
+| `trading` | `margin_type` | str | `isolated` | `isolated` or `cross` |
+| `trading` | `risk_per_trade_usd` | float | `10.0` | Fixed USD risk per trade |
+| `trading` | `risk_reward_ratio` | float | `2.0` | Don't hardcode — read from settings |
+| `trading` | `max_open_positions` | int | `1` | Per pair, not global |
+| `trading` | `order_expiry_candles` | int | `48` | Limit order expires after N H1 candles |
+| `trading` | `disable_session_filter` | bool | `true` | `true` = trade all hours |
+| `llm.cerebras` | `base_url` | str | `https://api.cerebras.ai/v1/...` | - |
+| `llm.cerebras` | `model` | str | `qwen-3-235b-...` | Analyst model |
+| `llm.cerebras` | `max_concurrent` | int | `2` | Semaphore limit |
+| `llm.cerebras` | `rpm` | int | `30` | Sliding window RPM |
+| `llm.cerebras` | `retry_on_429` | int | `2` | Max retries on 429 |
+| `llm.cerebras` | `timeout_sec` | int | `45` | Request timeout |
+| `llm.groq` | `base_url` | str | `https://api.groq.com/...` | - |
+| `llm.groq` | `model` | str | `llama-3.1-8b-instant` | Commander + Concierge model |
+| `llm.groq` | `max_concurrent` | int | `3` | Semaphore limit |
+| `llm.groq` | `rpm` | int | `30` | Sliding window RPM |
+| `llm.groq` | `timeout_sec` | int | `45` | Request timeout |
+| `llm.concierge` | `base_url` | str | `https://api.groq.com/...` | - |
+| `llm.concierge` | `model` | str | `openai/gpt-oss-120b` | Concierge model |
+| `llm.concierge` | `timeout_sec` | int | `600` | Concierge timeout |
+| `llm.concierge` | `max_tokens` | int | `5000` | Max output tokens |
+| `secrets` | `cerebras_api_key` | str | `${CEREBRAS_API_KEY}` | Resolved from .env |
+| `secrets` | `groq_api_key` | str | `${GROQ_API_KEY}` | Resolved from .env |
+| `secrets` | `concierge_api_key` | str | `${CONCIERGE_API_KEY}` | Resolved from .env |
+
+## Module Dependencies
 
 ```
 main.py → ohlcv_fetcher → exchange (singleton)
         → trend_agent → luxalgo_smc → _smc_core
         → reversal_agent → luxalgo_smc
         → confirmation_agent
-        → analyst_agent → trend/reversal/confirmation Result models
+        → analyst_agent → llm_rate_limiter (cerebras_limiter), trend/reversal/confirmation Result models
         → risk_agent → helpers (ATR), luxalgo_smc (OrderBlock)
         → execution_agent → exchange, storage (PaperTrade)
         → sltp_manager → storage
         → telegram_bot → commander_agent, concierge_agent
 ```
 
-Semua agent bergantung ke `base_agent.py`. Semua config bergantung ke `settings.py`. Exchange diakses via singleton `get_exchange()`.
+All agents depend on `base_agent.py`. All config accessed via `settings.py` (which delegates to `config_loader.py`). Exchange via singleton `get_exchange()`.
+
+## Config: .env vs config.json
+
+- **Secrets** (API keys, tokens) → `.env` only. Never commit real values
+- **All other config** → `config.json` (sections: `pairs`, `system`, `trading`, `secrets`, `llm`)
+- **Secret interpolation**: `config.json["secrets"]` uses `${ENV_VAR}` syntax resolved from `.env`
+- **Config access**: `settings.XXX` still works — `@property` delegates to `config_loader.py`
+- **Config caching**: `config_loader.py` caches config. Call `reload_config()` after editing `config.json`
 
 ## Environment & Execution Rules
 
-- **Python environment**: WAJIB `source venv/bin/activate` sebelum menjalankan Python apapun (`python`, `pytest`, `pip`, dll). Jangan pernah run tanpa activate venv
-- **Sequential execution**: Kerjakan SEMUA tugas secara sequential, satu per satu. JANGAN pernah paralel — model ini hanya 1 concurrent request. Tidak ada parallel tool calls, tidak ada background tasks yang overlap
+- **Python environment**: MUST `source venv/bin/activate` before running any Python command (`python`, `pytest`, `pip`, etc). Never run without activating venv
+- **Sequential execution**: Execute ALL tasks sequentially, one at a time. NEVER parallel — this model only supports 1 concurrent request. No parallel tool calls, no overlapping background tasks
 
-## Anti-Patterns / Jangan Pernah
+## Anti-Patterns / Never Do
 
-- **Jangan buat class kalau function cukup** — math agents pakai class karena ABC pattern, tapi utility/helper cukup function
-- **Jangan refactor yang sudah jalan** — kalau tidak ada bug report atau feature request, biarkan apa adanya
-- **Jangan tambah dependency baru** tanpa cek dulu apakah sudah ada di requirements.txt atau stdlib
-- **Jangan pakai `os.getenv()`** — selalu `settings.XXX` atau `settings.get_secret_value()`
-- **Jangan buat `ccxt.binanceusdm()` langsung** — selalu `get_exchange()`
-- **Jangan tulis raw SQL** — selalu pakai SQLAlchemy via `get_session()`
-- **Jangan install torch/gymnasium/SB3 di VPS** — OOM, training hanya di Colab
-- **Jangan upgrade ccxt** — versi baru nge-block testnet futures
-- **Jangan pakai `exchange.cancel_order()` untuk algo order** — pakai `cancel_algo_order()` dari `exchange.py`
+- **Don't create classes when functions suffice** — math agents use classes for ABC pattern, but utility/helper just need functions
+- **Don't refactor working code** — if no bug report or feature request, leave it as is
+- **Don't add new dependencies** without first checking if it already exists in requirements.txt or stdlib
+- **Don't use `os.getenv()`** — always use `settings.XXX` or `settings.get_secret_value()`. Non-secret config comes from `config.json` via `config_loader.py`
+- **Don't create `ccxt.binanceusdm()` directly** — always use `get_exchange()`
+- **Don't write raw SQL** — always use SQLAlchemy via `get_session()`
+- **Don't install torch/gymnasium/SB3 on VPS** — will OOM, training only on Colab
+- **Don't upgrade ccxt** — newer versions block testnet for futures
+- **Don't use `exchange.cancel_order()` for algo orders** — use `cancel_algo_order()` from `exchange.py`
 
 ## Maintenance Rule
 

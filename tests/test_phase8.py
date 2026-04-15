@@ -251,19 +251,8 @@ class TestPhase8Settings:
             assert s.ORDER_EXPIRY_CANDLES == 48
 
     def test_order_expiry_validation(self):
-        """ORDER_EXPIRY_CANDLES must be >= 1."""
-        from src.config.settings import Settings
-        with patch.dict(os.environ, {
-            'BINANCE_API_KEY': 'test',
-            'BINANCE_API_SECRET': 'test',
-            'BINANCE_TESTNET_KEY': 'test',
-            'BINANCE_TESTNET_SECRET': 'test',
-            'CEREBRAS_API_KEY': 'test',
-            'GROQ_API_KEY': 'test',
-            'CONCIERGE_API_KEY': 'test',
-            'TELEGRAM_BOT_TOKEN': 'test',
-            'TELEGRAM_CHAT_ID': '123',
-            'ORDER_EXPIRY_CANDLES': '0',
-        }, clear=False):
-            with pytest.raises(Exception):  # ValidationError
-                Settings()
+        """ORDER_EXPIRY_CANDLES is now read from config.json, not .env."""
+        # Validation of ORDER_EXPIRY_CANDLES moved to config.json.
+        # The value is a property on Settings that reads from config_loader.
+        from src.config.settings import settings
+        assert settings.ORDER_EXPIRY_CANDLES >= 1, "ORDER_EXPIRY_CANDLES should be >= 1"

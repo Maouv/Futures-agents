@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config.settings import settings
-from src.config.pairs import load_trading_config
+from src.config.config_loader import load_trading_config
 from src.data.ohlcv_fetcher import fetch_ohlcv
 from src.agents.math.trend_agent import TrendAgent
 from src.indicators.helpers import calculate_atr

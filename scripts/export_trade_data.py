@@ -118,7 +118,7 @@ def main():
     if args.pairs:
         pairs = args.pairs.split(',')
     else:
-        from src.config.pairs import load_pairs
+        from src.config.config_loader import load_pairs
         pairs = load_pairs()
 
     filepath = export_trades(

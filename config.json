@@ -1,0 +1,55 @@
+{
+  "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT"],
+
+  "system": {
+    "execution_mode": "paper",
+    "use_testnet": false,
+    "environment": "production",
+    "confirm_mainnet": false,
+    "telegram_chat_id": "5112950656",
+    "binance_rest_url": "https://fapi.binance.com",
+    "binance_ws_url": "wss://fstream.binance.com/ws",
+    "binance_testnet_url": "https://testnet.binancefuture.com",
+    "binance_testnet_ws_url": "wss://stream.binancefuture.com/ws"
+  },
+
+  "trading": {
+    "leverage": 1,
+    "margin_type": "isolated",
+    "risk_per_trade_usd": 5.0,
+    "risk_reward_ratio": 1.0,
+    "max_open_positions": 1,
+    "order_expiry_candles": 48,
+    "disable_session_filter": true
+  },
+
+  "secrets": {
+    "cerebras_api_key": "${CEREBRAS_API_KEY}",
+    "groq_api_key": "${GROQ_API_KEY}",
+    "concierge_api_key": "${CONCIERGE_API_KEY}"
+  },
+
+  "llm": {
+    "cerebras": {
+      "base_url": "https://api.cerebras.ai/v1/chat/completions",
+      "model": "qwen-3-235b-a22b-instruct-2507",
+      "max_concurrent": 2,
+      "rpm": 30,
+      "retry_on_429": 2,
+      "timeout_sec": 45
+    },
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1/chat/completions",
+      "model": "llama-3.1-8b-instant",
+      "max_concurrent": 3,
+      "rpm": 30,
+      "timeout_sec": 45
+    },
+    "concierge": {
+      "base_url": "https://api.groq.com/openai/v1/chat/completions",
+      "model": "openai/gpt-oss-120b",
+      "timeout_sec": 600,
+      "max_tokens": 5000
+    }
+  }
+}
