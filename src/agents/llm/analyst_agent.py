@@ -110,54 +110,55 @@ Respond in JSON only:
 
     try:
         cerebras_limiter.acquire()
-        response = client.chat.completions.create(
-            model=settings.CEREBRAS_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            max_tokens=200,
-        )
-        cerebras_limiter.release()
-        raw = response.choices[0].message.content
-        data = json.loads(raw)
-        return AnalystDecision(
-            action=data.get('action', 'SKIP'),
-            confidence=int(data.get('confidence', 50)),
-            reasoning=data.get('reasoning', ''),
-            source='llm',
-        )
+        try:
+            response = client.chat.completions.create(
+                model=settings.CEREBRAS_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                response_format={"type": "json_object"},
+                max_tokens=200,
+            )
+            raw = response.choices[0].message.content
+            data = json.loads(raw)
+            return AnalystDecision(
+                action=data.get('action', 'SKIP'),
+                confidence=int(data.get('confidence', 50)),
+                reasoning=data.get('reasoning', ''),
+                source='llm',
+            )
+        finally:
+            cerebras_limiter.release()
     except Exception as e:
-        cerebras_limiter.release()
         if _is_429(e):
             for attempt in range(settings.LLM_RETRY_ON_429):
-                backoff = 2 ** attempt  # 1s, 2s, 4s, ...
+                backoff = 2 ** attempt
                 logger.warning(f"[AnalystAgent] 429 rate limited. Retry {attempt + 1}/{settings.LLM_RETRY_ON_429} after {backoff}s")
                 time.sleep(backoff)
                 try:
                     cerebras_limiter.acquire()
-                    response = client.chat.completions.create(
-                        model=settings.CEREBRAS_MODEL,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.0,
-                        response_format={"type": "json_object"},
-                        max_tokens=200,
-                    )
-                    cerebras_limiter.release()
-                    raw = response.choices[0].message.content
-                    data = json.loads(raw)
-                    return AnalystDecision(
-                        action=data.get('action', 'SKIP'),
-                        confidence=int(data.get('confidence', 50)),
-                        reasoning=data.get('reasoning', ''),
-                        source='llm',
-                    )
+                    try:
+                        response = client.chat.completions.create(
+                            model=settings.CEREBRAS_MODEL,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.0,
+                            response_format={"type": "json_object"},
+                            max_tokens=200,
+                        )
+                        raw = response.choices[0].message.content
+                        data = json.loads(raw)
+                        return AnalystDecision(
+                            action=data.get('action', 'SKIP'),
+                            confidence=int(data.get('confidence', 50)),
+                            reasoning=data.get('reasoning', ''),
+                            source='llm',
+                        )
+                    finally:
+                        cerebras_limiter.release()
                 except Exception as retry_e:
-                    cerebras_limiter.release()
                     if _is_429(retry_e):
-                        continue  # Retry lagi
+                        continue
                     logger.warning(f"[AnalystAgent] Retry {attempt + 1} error: {retry_e}. Falling back to rule-based.")
                     return _rule_based_fallback(trend, reversal, confirmation)
-            # Semua retry habis
             logger.warning(f"[AnalystAgent] {settings.LLM_RETRY_ON_429} retries exhausted. Falling back to rule-based.")
         else:
             logger.warning(f"[AnalystAgent] API error: {e}. Falling back to rule-based.")

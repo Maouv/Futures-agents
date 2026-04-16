@@ -31,16 +31,18 @@ class LLMRateLimiter:
             response = client.chat.completions.create(...)
     """
 
-    def __init__(self, max_concurrent: int, rpm: int) -> None:
+    def __init__(self, max_concurrent: int, rpm: int, min_interval: float = 0.0) -> None:
         self.max_concurrent = max_concurrent
         self.rpm = rpm
+        self.min_interval = min_interval  # Minimum seconds between requests
         self._semaphore = threading.Semaphore(max_concurrent)
         self._timestamps: deque[float] = deque()
+        self._last_request_time: float = 0.0  # Track last request time for min_interval
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
 
     def acquire(self) -> None:
-        """Block sampai slot tersedia (semaphore + RPM check)."""
+        """Block sampai slot tersedia (semaphore + RPM check + min_interval)."""
         # Step 1: Acquire semaphore (max concurrent in-flight)
         self._semaphore.acquire()
 
@@ -55,15 +57,27 @@ class LLMRateLimiter:
                     self._condition.notify()
 
                 if len(self._timestamps) < self.rpm:
-                    # Slot RPM tersedia — record timestamp
-                    self._timestamps.append(now)
-                    return
+                    break  # Slot RPM tersedia
 
                 # Hitung waktu tunggu sampai timestamp tertua expired
                 sleep_time = self._timestamps[0] + 60.0 - now
                 if sleep_time > 0:
                     logger.warning(f"LLM RPM limit reached. Waiting {sleep_time:.2f}s")
                     self._condition.wait(timeout=sleep_time)
+
+            # Step 3: Enforce minimum interval between requests
+            if self.min_interval > 0 and self._last_request_time > 0:
+                now = time.monotonic()
+                elapsed = now - self._last_request_time
+                if elapsed < self.min_interval:
+                    wait = self.min_interval - elapsed
+                    self._condition.wait(timeout=wait)
+
+            # Record timestamp (RPM window + min_interval tracking)
+            now = time.monotonic()
+            self._timestamps.append(now)
+            self._last_request_time = now
+            return
 
     def release(self) -> None:
         """Release slot setelah response diterima."""
@@ -88,6 +102,7 @@ def _get_cerebras_limiter() -> LLMRateLimiter:
     return LLMRateLimiter(
         max_concurrent=settings.LLM_CEREBRAS_MAX_CONCURRENT,
         rpm=settings.LLM_CEREBRAS_RPM,
+        min_interval=settings.LLM_CEREBRAS_MIN_INTERVAL,
     )
 
 
@@ -97,6 +112,7 @@ def _get_groq_limiter() -> LLMRateLimiter:
     return LLMRateLimiter(
         max_concurrent=settings.LLM_GROQ_MAX_CONCURRENT,
         rpm=settings.LLM_GROQ_RPM,
+        min_interval=settings.LLM_GROQ_MIN_INTERVAL,
     )
 
 

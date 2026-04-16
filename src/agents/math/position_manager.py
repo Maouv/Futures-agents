@@ -63,7 +63,7 @@ def check_trailing_stop(current_prices: Dict[str, Dict]) -> List[Dict]:
     with get_session() as db:
         open_trades = db.query(PaperTrade).filter(
             PaperTrade.status == 'OPEN',
-            PaperTrade.execution_mode.in_(['live', 'testnet']),
+            PaperTrade.execution_mode.in_(['mainnet', 'testnet']),
         ).all()
 
         if not open_trades:

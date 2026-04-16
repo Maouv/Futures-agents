@@ -48,7 +48,7 @@ src/backtest/
 src/utils/
   exchange.py                     → Singleton ccxt factory + algo order helpers (place_algo_order, cancel_algo_order)
   rate_limiter.py                 → Sliding window 800 req/min (Binance)
-  llm_rate_limiter.py             → Semaphore + sliding window rate limiter (Cerebras/Groq LLM)
+  llm_rate_limiter.py             → Semaphore + sliding window + min_interval rate limiter (Cerebras/Groq LLM)
   kill_switch.py                  → Emergency stop
   logger.py                       → Loguru setup
 ```
@@ -143,7 +143,7 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 - **Order status `closed`**: Binance can return `closed` besides `filled`. Both = executed
 - **Naive datetime in SQLite**: `PaperTrade.entry_timestamp` from DB has no timezone. Must `.replace(tzinfo=timezone.utc)` before subtracting `datetime.now(timezone.utc)`
 - **ccxt version**: Use `4.2.86`. Do NOT upgrade — newer versions block testnet for futures. Algo API called manually via `requests`
-- **Rate limiter**: Max 800 req/min (Binance). LLM rate limiting handled by `cerebras_limiter` in `llm_rate_limiter.py` (semaphore + RPM sliding window)
+- **Rate limiter**: Max 800 req/min (Binance). LLM rate limiting handled by `cerebras_limiter` in `llm_rate_limiter.py` (semaphore + RPM sliding window + min_interval to prevent burst 429s)
 - **`onchain_fetcher.py`**: Placeholder, not implemented. Don't delete but don't use either
 - **RL training**: ONLY on Google Colab (GPU T4). Don't install torch/gymnasium/SB3 on VPS — will OOM
 - **Reconciliation symbol format**: `exchange.fetch_positions()` returns unified symbol `'BTC/USDT:USDT'`. Get raw symbol from `pos['info']['symbol']` (`'BTCUSDT'`), NOT from `pos['symbol']`
@@ -152,7 +152,7 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 - **SL/TP both hit**: If both SL and TP hit within the same candle, SL takes priority
 - **Trailing stop**: Live/testnet only. Paper mode skips. `position_manager.py` handles cancel+place SL algo. If new SL fails after cancel → emergency market close
 - **Liquidation price**: Simplified formula (`entry * (1 ∓ 1/leverage)`). Not tier-based — close enough for Telegram awareness
-- **trailing_step column**: Prevents re-applying same step. Only `step_index > trade.trailing_step` is processed
+- **trailing_step column**: Prevents re-applying same step. Default `-1` (never trailed), `0+` = last applied step index. Only `step_index > trade.trailing_step` is processed
 
 ## Config
 
@@ -193,12 +193,14 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 | `llm.cerebras` | `model` | str | `qwen-3-235b-...` | Analyst model |
 | `llm.cerebras` | `max_concurrent` | int | `2` | Semaphore limit |
 | `llm.cerebras` | `rpm` | int | `30` | Sliding window RPM |
+| `llm.cerebras` | `min_interval` | float | `3.0` | Minimum seconds between requests |
 | `llm.cerebras` | `retry_on_429` | int | `2` | Max retries on 429 |
 | `llm.cerebras` | `timeout_sec` | int | `45` | Request timeout |
 | `llm.groq` | `base_url` | str | `https://api.groq.com/...` | - |
 | `llm.groq` | `model` | str | `llama-3.1-8b-instant` | Commander + Concierge model |
 | `llm.groq` | `max_concurrent` | int | `3` | Semaphore limit |
 | `llm.groq` | `rpm` | int | `30` | Sliding window RPM |
+| `llm.groq` | `min_interval` | float | `1.0` | Minimum seconds between requests |
 | `llm.groq` | `timeout_sec` | int | `45` | Request timeout |
 | `llm.concierge` | `base_url` | str | `https://api.groq.com/...` | - |
 | `llm.concierge` | `model` | str | `openai/gpt-oss-120b` | Concierge model |

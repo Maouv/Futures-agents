@@ -147,6 +147,7 @@ DEFAULT_LLM = {
         "model": "qwen-3-235b-a22b-instruct-2507",
         "max_concurrent": 2,
         "rpm": 30,
+        "min_interval": 3.0,
         "retry_on_429": 2,
         "timeout_sec": 45,
     },
@@ -155,6 +156,7 @@ DEFAULT_LLM = {
         "model": "llama-3.1-8b-instant",
         "max_concurrent": 3,
         "rpm": 30,
+        "min_interval": 1.0,
         "timeout_sec": 45,
     },
     "concierge": {

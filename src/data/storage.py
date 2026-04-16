@@ -97,12 +97,12 @@ class PaperTrade(Base):
     close_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)   # 'TP', 'SL', 'MANUAL', 'EXPIRED', 'RECONCILED', 'EMERGENCY_CLOSE_SL_FAIL', 'MODE_SWITCH'
 
     # ── Live mode columns (nullable, hanya terisi di EXECUTION_MODE='live') ──
-    execution_mode: Mapped[str | None] = mapped_column(String(10), nullable=True, default="paper")  # 'paper' atau 'live'
+    execution_mode: Mapped[str | None] = mapped_column(String(10), nullable=True, default="paper")  # 'paper', 'testnet', or 'mainnet'
     exchange_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Binance entry order ID
     sl_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance SL order ID
     tp_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance TP order ID
     close_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Actual fill price saat SL/TP hit
-    trailing_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0=belum trailing, N=step index terakhir
+    trailing_step: Mapped[int] = mapped_column(Integer, nullable=False, default=-1)  # -1=belum trailing, 0+=step index terakhir
     liq_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Estimasi harga likuidasi
 
 

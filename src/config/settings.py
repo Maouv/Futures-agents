@@ -227,6 +227,11 @@ class Settings(BaseSettings):
         return load_llm_config().get('cerebras', {}).get('rpm', 30)
 
     @property
+    def LLM_CEREBRAS_MIN_INTERVAL(self) -> float:
+        from src.config.config_loader import load_llm_config
+        return load_llm_config().get('cerebras', {}).get('min_interval', 2.0)
+
+    @property
     def LLM_RETRY_ON_429(self) -> int:
         from src.config.config_loader import load_llm_config
         return load_llm_config().get('cerebras', {}).get('retry_on_429', 2)
@@ -240,6 +245,11 @@ class Settings(BaseSettings):
     def LLM_GROQ_RPM(self) -> int:
         from src.config.config_loader import load_llm_config
         return load_llm_config().get('groq', {}).get('rpm', 30)
+
+    @property
+    def LLM_GROQ_MIN_INTERVAL(self) -> float:
+        from src.config.config_loader import load_llm_config
+        return load_llm_config().get('groq', {}).get('min_interval', 1.0)
 
     @property
     def GROQ_BASE_URL(self) -> str:
