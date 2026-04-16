@@ -131,6 +131,14 @@ DEFAULT_TRADING = {
     "max_open_positions": 1,
     "order_expiry_candles": 48,
     "disable_session_filter": True,
+    "trailing_stop": {
+        "enabled": False,
+        "steps": [
+            {"profit_pct": 1.0, "new_sl_pct": 0.0},
+            {"profit_pct": 2.0, "new_sl_pct": 0.5},
+            {"profit_pct": 3.0, "new_sl_pct": 1.0},
+        ],
+    },
 }
 
 DEFAULT_LLM = {
@@ -176,6 +184,14 @@ def load_trading_config() -> Dict:
     data = _load_config()
     trading = data.get("trading", {})
     return {**DEFAULT_TRADING, **trading}
+
+
+def load_trailing_stop_config() -> Dict:
+    """Load trailing_stop sub-section from config.json trading section."""
+    trading = load_trading_config()
+    default_ts = DEFAULT_TRADING["trailing_stop"]
+    user_ts = trading.get("trailing_stop", {})
+    return {**default_ts, **user_ts}
 
 
 def load_llm_config() -> Dict:

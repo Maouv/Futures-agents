@@ -20,7 +20,15 @@
     "risk_reward_ratio": 1.0,
     "max_open_positions": 1,
     "order_expiry_candles": 48,
-    "disable_session_filter": true
+    "disable_session_filter": true,
+    "trailing_stop": {
+      "enabled": true,
+      "steps": [
+        {"profit_pct": 1.0, "new_sl_pct": 0.0},
+        {"profit_pct": 2.0, "new_sl_pct": 0.5},
+        {"profit_pct": 3.0, "new_sl_pct": 1.0}
+      ]
+    }
   },
 
   "secrets": {

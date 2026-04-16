@@ -27,6 +27,7 @@ from src.agents.math.trend_agent import TrendResult
 from src.utils.exchange import get_exchange, reset_exchange, place_algo_order
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
+from src.agents.math.position_manager import calculate_liquidation_price
 
 # ── SL Retry Constants ────────────────────────────────────────────────────
 SL_MAX_RETRIES = 3
@@ -409,6 +410,8 @@ class ExecutionAgent(BaseAgent):
                 self._log_error(f"TP algo FAILED: {e}. SL still protects capital.")
 
             # ── Store OPEN di DB ───────────────────────────────────────────
+            liq_price = calculate_liquidation_price(filled_price, reversal_result.signal, risk_result.leverage)
+
             with get_session() as db:
                 trade = PaperTrade(
                     pair=symbol,
@@ -424,6 +427,7 @@ class ExecutionAgent(BaseAgent):
                     exchange_order_id=exchange_order_id,
                     sl_order_id=sl_order_id,
                     tp_order_id=tp_order_id,
+                    liq_price=liq_price,
                 )
                 db.add(trade)
                 db.flush()
@@ -438,6 +442,7 @@ class ExecutionAgent(BaseAgent):
                 f"Entry: {filled_price:.2f} | "
                 f"SL: {risk_result.sl_price:.2f} ({sl_status}) | "
                 f"TP: {risk_result.tp_price:.2f} ({tp_status}) | "
+                f"Liq: ${liq_price:.2f} | "
                 f"SL_Order: {sl_order_id} | TP_Order: {tp_order_id}"
             )
 
@@ -501,6 +506,7 @@ class ExecutionAgent(BaseAgent):
                     'sl_price': trade.sl_price,
                     'tp_price': trade.tp_price,
                     'size': trade.size,
+                    'leverage': trade.leverage,
                     'exchange_order_id': trade.exchange_order_id,
                     'entry_timestamp': trade.entry_timestamp,
                 }
@@ -712,6 +718,8 @@ class ExecutionAgent(BaseAgent):
             )
 
         # ── Update DB ──────────────────────────────────────────────────────
+        liq_price = calculate_liquidation_price(filled_price, trade_side, trade.get('leverage', 10))
+
         with get_session() as db:
             db_trade = db.query(PaperTrade).get(trade_id)
             if db_trade:
@@ -721,12 +729,14 @@ class ExecutionAgent(BaseAgent):
                 db_trade.sl_order_id = sl_order_id
                 db_trade.tp_order_id = tp_order_id
                 db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
+                db_trade.liq_price = liq_price
 
         self._log(
             f"LIVE TRADE OPENED | ID: {trade_id} | "
             f"{trade_pair} {trade_side} | "
             f"Entry: {filled_price:.2f} | "
             f"SL: {trade_sl_price:.2f} | TP: {trade_tp_price:.2f} | "
+            f"Liq: ${liq_price:.2f} | "
             f"SL_Order: {sl_order_id} | TP_Order: {tp_order_id}"
         )
 

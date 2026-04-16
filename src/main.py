@@ -20,6 +20,7 @@ from src.agents.math.confirmation_agent import ConfirmationAgent
 from src.agents.math.risk_agent import RiskAgent, OverlapSkipError
 from src.agents.math.execution_agent import ExecutionAgent
 from src.agents.math.sltp_manager import check_paper_trades
+from src.agents.math.position_manager import check_trailing_stop
 from src.agents.llm.analyst_agent import run_analyst
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
@@ -166,6 +167,10 @@ class TradingBot:
             if current_prices:
                 self._run_sltp_check(current_prices)
 
+            # ── 7. Trailing Stop Check (live mode only) ────────────────────
+            if current_prices:
+                self._run_trailing_stop_check(current_prices)
+
         except Exception as e:
             logger.error(f"Cycle error: {e}", exc_info=True)
 
@@ -180,6 +185,25 @@ class TradingBot:
                 f"{trade['pair']} {trade['side']}\n"
                 f"PnL: ${trade['pnl']:.2f}"
             )
+
+    def _run_trailing_stop_check(self, current_prices: dict):
+        """Cek trailing stop untuk live trades (hanya live/testnet mode)."""
+        updated = check_trailing_stop(current_prices)
+
+        for trade in updated:
+            if trade.get('emergency'):
+                self.send_notification_sync(
+                    f"EMERGENCY CLOSE (trailing SL fail)\n"
+                    f"{trade['pair']} {trade['side']}\n"
+                    f"Old SL: ${trade['old_sl']:.2f} — new SL placement failed"
+                )
+            else:
+                self.send_notification_sync(
+                    f"Trailing SL Updated\n"
+                    f"{trade['pair']} {trade['side']}\n"
+                    f"SL: ${trade['old_sl']:.2f} → ${trade['new_sl']:.2f}\n"
+                    f"Step: {trade['step_index']}"
+                )
 
     def run(self):
         """Entry point utama."""

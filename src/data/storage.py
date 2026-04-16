@@ -102,6 +102,8 @@ class PaperTrade(Base):
     sl_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance SL order ID
     tp_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance TP order ID
     close_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Actual fill price saat SL/TP hit
+    trailing_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0=belum trailing, N=step index terakhir
+    liq_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Estimasi harga likuidasi
 
 
 class TradeLog(Base):
@@ -142,6 +144,8 @@ def migrate_db() -> None:
         ("paper_trades", "sl_order_id", "VARCHAR(50)"),
         ("paper_trades", "tp_order_id", "VARCHAR(50)"),
         ("paper_trades", "close_price", "FLOAT"),
+        ("paper_trades", "trailing_step", "INTEGER DEFAULT 0"),
+        ("paper_trades", "liq_price", "FLOAT"),
     ]
 
     # Widen close_reason column to fit new reasons (EMERGENCY_CLOSE_SL_FAIL, MODE_SWITCH)

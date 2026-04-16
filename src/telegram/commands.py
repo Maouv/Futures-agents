@@ -132,6 +132,7 @@ def cmd_get_status() -> str:
     mode = settings.EXECUTION_MODE.upper()
     testnet = "TESTNET" if settings.USE_TESTNET else "MAINNET"
     kill = "ON" if check_kill_switch() else "OFF"
+    trailing = "ON" if settings.TRAILING_STOP_ENABLED else "OFF"
 
     if settings.EXECUTION_MODE == "live":
         return (
@@ -139,13 +140,15 @@ def cmd_get_status() -> str:
             f"Mode: LIVE ({testnet})\n"
             f"Kill switch: {kill}\n"
             f"Leverage: {settings.FUTURES_DEFAULT_LEVERAGE}x\n"
-            f"Max positions/pair: {settings.MAX_OPEN_POSITIONS}"
+            f"Max positions/pair: {settings.MAX_OPEN_POSITIONS}\n"
+            f"Trailing stop: {trailing}"
         )
     return (
         f"Bot: RUNNING\n"
         f"Mode: PAPER\n"
         f"Kill switch: {kill}\n"
-        f"Max positions/pair: {settings.MAX_OPEN_POSITIONS}"
+        f"Max positions/pair: {settings.MAX_OPEN_POSITIONS}\n"
+        f"Trailing stop: {trailing}"
     )
 
 
@@ -167,9 +170,12 @@ def cmd_get_open_trades() -> str:
         lines = [f"Open Trades [{mode_label}]:"]
         for t in trades:
             status_tag = " [PENDING]" if t.status == 'PENDING_ENTRY' else ""
+            liq_tag = f" | Liq: ${t.liq_price:,.2f}" if t.liq_price else ""
+            step_tag = f" | Step: {t.trailing_step}" if t.trailing_step > 0 else ""
             lines.append(
                 f"  ID:{t.id} | {t.pair} {t.side}{status_tag} | "
                 f"Entry: ${t.entry_price:,.2f} | SL: ${t.sl_price:,.2f} | TP: ${t.tp_price:,.2f}"
+                f"{liq_tag}{step_tag}"
             )
     return "\n".join(lines)
 

@@ -194,6 +194,16 @@ class Settings(BaseSettings):
         from src.config.config_loader import load_trading_config
         return load_trading_config().get('disable_session_filter', True)
 
+    @property
+    def TRAILING_STOP_ENABLED(self) -> bool:
+        from src.config.config_loader import load_trailing_stop_config
+        return load_trailing_stop_config().get('enabled', False)
+
+    @property
+    def TRAILING_STOP_STEPS(self) -> list:
+        from src.config.config_loader import load_trailing_stop_config
+        return load_trailing_stop_config().get('steps', [])
+
     # ── LLM Properties (from config.json) ──────────────────────────────────
 
     @property
