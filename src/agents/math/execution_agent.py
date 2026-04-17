@@ -27,6 +27,8 @@ from src.agents.math.trend_agent import TrendResult
 from src.utils.exchange import get_exchange, reset_exchange, place_algo_order
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
+from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.trade_utils import calculate_pnl, close_trade
 from src.agents.math.position_manager import calculate_liquidation_price
 
 # ── SL Retry Constants ────────────────────────────────────────────────────
@@ -95,12 +97,7 @@ class ExecutionAgent(BaseAgent):
         else:
             return self._execute_paper(symbol, risk_result, reversal_result)
 
-    @staticmethod
-    def _current_mode() -> str:
-        """Return execution mode tag: 'paper', 'testnet', or 'mainnet'."""
-        if settings.EXECUTION_MODE != "live":
-            return "paper"
-        return "testnet" if settings.USE_TESTNET else "mainnet"
+    # _current_mode removed — use get_current_mode() from src.utils.mode
 
     def _validate_signal(
         self,
@@ -167,7 +164,7 @@ class ExecutionAgent(BaseAgent):
                     leverage=risk_result.leverage,
                     status='OPEN',
                     entry_timestamp=datetime.now(timezone.utc),
-                    execution_mode=self._current_mode(),
+                    execution_mode=get_current_mode(),
                 )
                 db.add(trade)
                 db.flush()
@@ -231,22 +228,8 @@ class ExecutionAgent(BaseAgent):
             # ── Place LIMIT Order at OB Midpoint (normal path) ────────────
             return self._execute_live_limit(symbol, risk_result, reversal_result, exchange)
 
-        except ccxt.InsufficientFunds as e:
-            self._log_error(f"Insufficient funds: {e}")
-            return ExecutionResult(action="SKIP", reason="Insufficient funds")
-        except ccxt.InvalidOrder as e:
-            self._log_error(f"Invalid order: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
-        except ccxt.NetworkError as e:
-            self._log_error(f"Network error: {e}")
-            reset_exchange()
-            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
-        except ccxt.ExchangeError as e:
-            self._log_error(f"Exchange error: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
-        except Exception as e:
-            self._log_error(f"Unexpected error in live execution: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+        except (ccxt.InsufficientFunds, ccxt.InvalidOrder, ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
+            return self._handle_ccxt_error(e, "live execution")
 
     def _execute_live_limit(
         self,
@@ -300,7 +283,7 @@ class ExecutionAgent(BaseAgent):
                     leverage=risk_result.leverage,
                     status='PENDING_ENTRY',
                     entry_timestamp=datetime.now(timezone.utc),
-                    execution_mode=self._current_mode(),
+                    execution_mode=get_current_mode(),
                     exchange_order_id=exchange_order_id,
                 )
                 db.add(trade)
@@ -313,22 +296,8 @@ class ExecutionAgent(BaseAgent):
                 trade_id=trade_id
             )
 
-        except ccxt.InsufficientFunds as e:
-            self._log_error(f"Insufficient funds: {e}")
-            return ExecutionResult(action="SKIP", reason="Insufficient funds")
-        except ccxt.InvalidOrder as e:
-            self._log_error(f"Invalid order: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
-        except ccxt.NetworkError as e:
-            self._log_error(f"Network error: {e}")
-            reset_exchange()
-            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
-        except ccxt.ExchangeError as e:
-            self._log_error(f"Exchange error: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
-        except Exception as e:
-            self._log_error(f"Unexpected error in live limit execution: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+        except (ccxt.InsufficientFunds, ccxt.InvalidOrder, ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
+            return self._handle_ccxt_error(e, "live limit execution")
 
     def _execute_live_market(
         self,
@@ -423,7 +392,7 @@ class ExecutionAgent(BaseAgent):
                     leverage=risk_result.leverage,
                     status='OPEN',
                     entry_timestamp=datetime.now(timezone.utc),
-                    execution_mode=self._current_mode(),
+                    execution_mode=get_current_mode(),
                     exchange_order_id=exchange_order_id,
                     sl_order_id=sl_order_id,
                     tp_order_id=tp_order_id,
@@ -452,22 +421,8 @@ class ExecutionAgent(BaseAgent):
                 trade_id=trade_id
             )
 
-        except ccxt.InsufficientFunds as e:
-            self._log_error(f"Insufficient funds: {e}")
-            return ExecutionResult(action="SKIP", reason="Insufficient funds")
-        except ccxt.InvalidOrder as e:
-            self._log_error(f"Invalid order: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
-        except ccxt.NetworkError as e:
-            self._log_error(f"Network error: {e}")
-            reset_exchange()
-            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
-        except ccxt.ExchangeError as e:
-            self._log_error(f"Exchange error: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
-        except Exception as e:
-            self._log_error(f"Unexpected error in live market execution: {e}")
-            return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+        except (ccxt.InsufficientFunds, ccxt.InvalidOrder, ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
+            return self._handle_ccxt_error(e, "live market execution")
 
     def check_pending_orders(self) -> list:
         """
@@ -484,7 +439,7 @@ class ExecutionAgent(BaseAgent):
         if settings.EXECUTION_MODE != "live":
             return results
 
-        mode = self._current_mode()
+        mode = get_current_mode()
 
         with get_session() as db:
             pending_trades = (
@@ -672,19 +627,12 @@ class ExecutionAgent(BaseAgent):
                 emergency_close_price = filled_price  # fallback
 
             # Hitung PnL dari emergency close
-            if trade_side == 'LONG':
-                emergency_pnl = (emergency_close_price - filled_price) * filled_amount
-            else:
-                emergency_pnl = (filled_price - emergency_close_price) * filled_amount
+            emergency_pnl = calculate_pnl(trade_side, filled_price, emergency_close_price, filled_amount)
 
             with get_session() as db:
                 db_trade = db.query(PaperTrade).get(trade_id)
                 if db_trade:
-                    db_trade.status = 'CLOSED'
-                    db_trade.close_reason = 'EMERGENCY_CLOSE_SL_FAIL'
-                    db_trade.close_price = emergency_close_price
-                    db_trade.pnl = emergency_pnl
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    close_trade(db_trade, 'EMERGENCY_CLOSE_SL_FAIL', emergency_close_price, emergency_pnl)
                     db_trade.entry_price = filled_price
                     db_trade.size = filled_amount
                     db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
@@ -742,6 +690,24 @@ class ExecutionAgent(BaseAgent):
 
         return result
 
+    def _handle_ccxt_error(self, e: Exception, context: str = "execution") -> ExecutionResult:
+        """Unified ccxt error handler — returns SKIP ExecutionResult."""
+        if isinstance(e, ccxt.InsufficientFunds):
+            self._log_error(f"Insufficient funds: {e}")
+            return ExecutionResult(action="SKIP", reason="Insufficient funds")
+        if isinstance(e, ccxt.InvalidOrder):
+            self._log_error(f"Invalid order: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
+        if isinstance(e, ccxt.NetworkError):
+            self._log_error(f"Network error: {e}")
+            reset_exchange()
+            return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
+        if isinstance(e, ccxt.ExchangeError):
+            self._log_error(f"Exchange error: {e}")
+            return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
+        self._log_error(f"Unexpected error in {context}: {e}")
+        return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
+
     def _set_account_params(self, exchange, symbol: str, leverage: int) -> None:
         """Set leverage dan margin mode untuk symbol. Error ditoleransi (sudah diset sebelumnya)."""
         try:
@@ -766,7 +732,7 @@ class ExecutionAgent(BaseAgent):
 
     def _count_open_positions(self, symbol: str) -> int:
         """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY), filtered by current mode."""
-        mode = self._current_mode()
+        mode = get_current_mode()
         with get_session() as db:
             count = (
                 db.query(PaperTrade)
