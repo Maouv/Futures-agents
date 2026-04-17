@@ -32,3 +32,4 @@ data/rl_models/
 .claude/
 .serena/
 .rtk/
+.aider*

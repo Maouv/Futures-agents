@@ -12,6 +12,7 @@ from typing import Dict, List
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.logger import logger
+from src.utils.trade_utils import calculate_pnl, close_trade
 
 
 def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
@@ -88,17 +89,10 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
                 close_price = trade.sl_price if hit_sl else trade.tp_price
 
                 # Hitung PnL
-                if trade.side == 'LONG':
-                    pnl = (close_price - trade.entry_price) * trade.size
-                else:  # SHORT
-                    pnl = (trade.entry_price - close_price) * trade.size
+                pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
                 # Update trade
-                trade.status = 'CLOSED'
-                trade.close_price = close_price
-                trade.pnl = pnl
-                trade.close_reason = close_reason
-                trade.close_timestamp = datetime.now(timezone.utc)
+                close_trade(trade, close_reason, close_price, pnl)
 
                 closed.append({
                     'trade_id': trade.id,

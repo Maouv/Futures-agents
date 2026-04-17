@@ -28,6 +28,7 @@ from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, get_ws_base_url, reset_exchange
 from src.utils.logger import logger
+from src.utils.trade_utils import calculate_pnl, close_trade
 
 
 # ── Constants ──────────────────────────────────────────────────────────────
@@ -283,17 +284,10 @@ class UserDataStream:
                 trade.sl_price if close_reason == 'SL' else trade.tp_price
             )
 
-            if trade.side == 'LONG':
-                pnl = (close_price - trade.entry_price) * trade.size
-            else:  # SHORT
-                pnl = (trade.entry_price - close_price) * trade.size
+            pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
             # ── Update Trade di DB ──────────────────────────────────────────
-            trade.status = 'CLOSED'
-            trade.close_reason = close_reason
-            trade.close_price = close_price
-            trade.pnl = pnl
-            trade.close_timestamp = datetime.now(timezone.utc)
+            close_trade(trade, close_reason, close_price, pnl)
 
             # ── Extract attributes sebelum session close ────────────────────
             # Mencegah DetachedInstanceError saat akses di luar `with` block

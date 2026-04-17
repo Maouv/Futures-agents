@@ -34,7 +34,7 @@ src/indicators/
   _smc_core.py                   → Internal SMC logic (OB, FVG, BOS/CHOCH)
   luxalgo_smc.py                  → Public API: detect_order_blocks(), detect_fvg(), detect_bos_choch()
   mean_reversion.py               → RSI + Bollinger Bands
-  helpers.py                      → ATR, Swing High/Low
+  helpers.py                      → ATR, Swing High-Low
 src/rl/                           → RL filter — training on Colab, ONNX inference on VPS
   environment.py                  → TradingEnvironment, 13 features, SKIP/ENTRY
   dqn_agent.py                    → DQN + Thompson Sampling, ONNX export
@@ -51,19 +51,17 @@ src/utils/
   llm_rate_limiter.py             → Semaphore + sliding window + min_interval rate limiter (Cerebras/Groq LLM)
   kill_switch.py                  → Emergency stop
   logger.py                       → Loguru setup
+
+data/historical/    → CSV OHLCV per pair×timeframe (backtest input)
+data/rl_models/     → ONNX model + normalization params (VPS inference)
+data/rl_training/   → Signal CSV per pair×year (Colab training input)
+data/backtest_results/ → Backtest output
+tests/              → Pytest unit tests (CI-ready)
+scripts/            → Manual utility & test scripts (not for CI)
+docs/               → PRD, implementation plan, specs
+examples/           → RL environment demo
+logs/               → Runtime logs (auto-generated)
 ```
-
-## Directory Structure (non-src)
-
-- `data/historical/` → CSV OHLCV per pair×timeframe (backtest input)
-- `data/rl_models/` → ONNX model + normalization params (VPS inference)
-- `data/rl_training/` → Signal CSV per pair×year (Colab training input)
-- `data/backtest_results/` → Backtest output
-- `tests/` → Pytest unit tests (CI-ready)
-- `scripts/` → Manual utility & test scripts (not for CI)
-- `docs/` → PRD, implementation plan, specs
-- `examples/` → RL environment demo
-- `logs/` → Runtime logs (auto-generated)
 
 ## Result Models (Pydantic)
 
@@ -95,7 +93,7 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 
 ## How It Works
 
-1. Every 15 minutes (APScheduler, cron `0,15,30,45`), for each pair in `pairs.json`:
+1. Every 15 minutes (APScheduler, cron `0,15,30,45`), for each pair in `config.json`:
 2. `fetch_ohlcv()` → H4, H1, 15m → gap check → session filter (London/NY only)
 3. `TrendAgent(H4)` + `ReversalAgent(H1)` + `ConfirmationAgent(15m)` → raw signals
 4. `AnalystAgent(LLM)` → LONG/SHORT/SKIP decision (rule-based fallback if API down)
@@ -108,7 +106,8 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 
 - **Result model**: Each agent returns a Pydantic BaseModel (not dict). Naming pattern: `XxxResult`
 - **Agent pattern**: All math agents extend `BaseAgent`, implement `run() → XxxResult`
-- **Config**: `config.json` is single source of truth for all non-secret config. `settings.py` holds secrets from `.env` + `@property` delegates to `config_loader.py`. Access via `settings.XXX`
+- **Config**: `config.json` is single source of truth for all non-secret config (sections: `pairs`, `system`, `trading`, `llm`, `secrets`). Secrets via `.env` + `${ENV_VAR}` interpolation. Access via `settings.XXX` (delegates to `config_loader.py`). Call `reload_config()` after editing `config.json`
+- **Key config keys** (non-obvious): `confirm_mainnet` (must be `true` when live+mainnet), `disable_session_filter` (`true` = trade all hours), `order_expiry_candles` (limit order expires after N H1 candles)
 - **Exchange**: Always use `get_exchange()` from `src/utils/exchange.py`. Don't create `ccxt.binanceusdm()` directly
 - **Exit check**: Use candle **high/low**, not close (avoid look-ahead bias)
 - **SKIPPED trades**: Excluded from all metrics (win rate, profit factor, drawdown)
@@ -117,7 +116,19 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 - **Model**: Use `openai` SDK + `base_url`
 - **Position sizing**: Fixed USD (`RISK_PER_TRADE_USD`), not percentage of balance
 - **DB session**: Always use `get_session()` context manager. No raw SQL
-- **New files must go to the correct directory** — if the target directory doesn't exist, create it first. Examples: test files → `tests/`, utility scripts → `scripts/`, new agents → `src/agents/math/` or `src/agents/llm/`, indicators → `src/indicators/`, data output → `data/<appropriate_subdir>/`
+- **New files must go to the correct directory** — if the target directory doesn't exist, create it first
+- **Don't refactor working code** — if no bug report or feature request, leave it as is
+- **Don't add new dependencies** without first checking if it already exists in requirements.txt or stdlib
+- **Don't install torch/gymnasium/SB3 on VPS** — will OOM, training only on Colab
+- **Don't upgrade ccxt** — newer versions block testnet for futures
+
+## Non-Obvious Dependencies
+
+```
+analyst_agent → llm_rate_limiter (cerebras_limiter)
+risk_agent → luxalgo_smc (OrderBlock)
+position_manager → exchange (cancel_algo_order, place_algo_order)
+```
 
 ## How to Add a New Feature
 
@@ -154,103 +165,10 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 - **Liquidation price**: Simplified formula (`entry * (1 ∓ 1/leverage)`). Not tier-based — close enough for Telegram awareness
 - **trailing_step column**: Prevents re-applying same step. Default `-1` (never trailed), `0+` = last applied step index. Only `step_index > trade.trailing_step` is processed
 
-## Config
-
-**`.env`** (secrets only):
-
-| Key | Type | Required | Description |
-|-----|------|----------|-------------|
-| `BINANCE_API_KEY/SECRET` | SecretStr | Live only | Production credentials |
-| `BINANCE_TESTNET_KEY/SECRET` | SecretStr | Live only | Testnet credentials |
-| `CEREBRAS_API_KEY` | SecretStr | Yes | Analyst Agent |
-| `GROQ_API_KEY` | SecretStr | Yes | Commander + Concierge |
-| `CONCIERGE_API_KEY` | SecretStr | No | Concierge (fallback to GROQ_API_KEY) |
-| `TELEGRAM_BOT_TOKEN` | SecretStr | Yes | Bot token |
-
-**`config.json`** (all non-secret config):
-
-| Section | Key | Type | Default | Description |
-|---------|-----|------|---------|-------------|
-| `system` | `execution_mode` | str | `paper` | `paper` = sim DB, `live` = real orders |
-| `system` | `use_testnet` | bool | `false` | `true` = Binance Testnet |
-| `system` | `confirm_mainnet` | bool | `false` | Must be `true` when live+mainnet |
-| `system` | `environment` | str | `production` | - |
-| `system` | `telegram_chat_id` | str | `""` | Can be negative (group) |
-| `system` | `binance_rest_url` | str | `https://fapi.binance.com` | - |
-| `system` | `binance_ws_url` | str | `wss://fstream.binance.com/ws` | - |
-| `system` | `binance_testnet_url` | str | `https://testnet.binancefuture.com` | - |
-| `system` | `binance_testnet_ws_url` | str | `wss://stream.binancefuture.com/ws` | - |
-| `trading` | `leverage` | int | `10` | Range 1-125 |
-| `trading` | `margin_type` | str | `isolated` | `isolated` or `cross` |
-| `trading` | `risk_per_trade_usd` | float | `10.0` | Fixed USD risk per trade |
-| `trading` | `risk_reward_ratio` | float | `2.0` | Don't hardcode — read from settings |
-| `trading` | `max_open_positions` | int | `1` | Per pair, not global |
-| `trading` | `order_expiry_candles` | int | `48` | Limit order expires after N H1 candles |
-| `trading` | `disable_session_filter` | bool | `true` | `true` = trade all hours |
-| `trading.trailing_stop` | `enabled` | bool | `false` | Master switch for trailing stop |
-| `trading.trailing_stop` | `steps` | list[dict] | `[]` | Step definitions: `{profit_pct, new_sl_pct}` |
-| `llm.cerebras` | `base_url` | str | `https://api.cerebras.ai/v1/...` | - |
-| `llm.cerebras` | `model` | str | `qwen-3-235b-...` | Analyst model |
-| `llm.cerebras` | `max_concurrent` | int | `2` | Semaphore limit |
-| `llm.cerebras` | `rpm` | int | `30` | Sliding window RPM |
-| `llm.cerebras` | `min_interval` | float | `3.0` | Minimum seconds between requests |
-| `llm.cerebras` | `retry_on_429` | int | `2` | Max retries on 429 |
-| `llm.cerebras` | `timeout_sec` | int | `45` | Request timeout |
-| `llm.groq` | `base_url` | str | `https://api.groq.com/...` | - |
-| `llm.groq` | `model` | str | `llama-3.1-8b-instant` | Commander + Concierge model |
-| `llm.groq` | `max_concurrent` | int | `3` | Semaphore limit |
-| `llm.groq` | `rpm` | int | `30` | Sliding window RPM |
-| `llm.groq` | `min_interval` | float | `1.0` | Minimum seconds between requests |
-| `llm.groq` | `timeout_sec` | int | `45` | Request timeout |
-| `llm.concierge` | `base_url` | str | `https://api.groq.com/...` | - |
-| `llm.concierge` | `model` | str | `openai/gpt-oss-120b` | Concierge model |
-| `llm.concierge` | `timeout_sec` | int | `600` | Concierge timeout |
-| `llm.concierge` | `max_tokens` | int | `5000` | Max output tokens |
-| `secrets` | `cerebras_api_key` | str | `${CEREBRAS_API_KEY}` | Resolved from .env |
-| `secrets` | `groq_api_key` | str | `${GROQ_API_KEY}` | Resolved from .env |
-| `secrets` | `concierge_api_key` | str | `${CONCIERGE_API_KEY}` | Resolved from .env |
-
-## Module Dependencies
-
-```
-main.py → ohlcv_fetcher → exchange (singleton)
-        → trend_agent → luxalgo_smc → _smc_core
-        → reversal_agent → luxalgo_smc
-        → confirmation_agent
-        → analyst_agent → llm_rate_limiter (cerebras_limiter), trend/reversal/confirmation Result models
-        → risk_agent → helpers (ATR), luxalgo_smc (OrderBlock)
-        → execution_agent → exchange, storage (PaperTrade)
-        → position_manager → exchange (cancel_algo_order, place_algo_order), storage (PaperTrade)
-        → sltp_manager → storage
-        → telegram_bot → commander_agent, concierge_agent
-```
-
-All agents depend on `base_agent.py`. All config accessed via `settings.py` (which delegates to `config_loader.py`). Exchange via singleton `get_exchange()`.
-
-## Config: .env vs config.json
-
-- **Secrets** (API keys, tokens) → `.env` only. Never commit real values
-- **All other config** → `config.json` (sections: `pairs`, `system`, `trading`, `secrets`, `llm`)
-- **Secret interpolation**: `config.json["secrets"]` uses `${ENV_VAR}` syntax resolved from `.env`
-- **Config access**: `settings.XXX` still works — `@property` delegates to `config_loader.py`
-- **Config caching**: `config_loader.py` caches config. Call `reload_config()` after editing `config.json`
-
 ## Environment & Execution Rules
 
 - **Python environment**: MUST `source venv/bin/activate` before running any Python command (`python`, `pytest`, `pip`, etc). Never run without activating venv
 - **Sequential execution**: Execute ALL tasks sequentially, one at a time. NEVER parallel — this model only supports 1 concurrent request. No parallel tool calls, no overlapping background tasks
-
-## Anti-Patterns / Never Do
-
-- **Don't create classes when functions suffice** — math agents use classes for ABC pattern, but utility/helper just need functions
-- **Don't refactor working code** — if no bug report or feature request, leave it as is
-- **Don't add new dependencies** without first checking if it already exists in requirements.txt or stdlib
-- **Don't use `os.getenv()`** — always use `settings.XXX` or `settings.get_secret_value()`. Non-secret config comes from `config.json` via `config_loader.py`
-- **Don't create `ccxt.binanceusdm()` directly** — always use `get_exchange()`
-- **Don't write raw SQL** — always use SQLAlchemy via `get_session()`
-- **Don't install torch/gymnasium/SB3 on VPS** — will OOM, training only on Colab
-- **Don't upgrade ccxt** — newer versions block testnet for futures
-- **Don't use `exchange.cancel_order()` for algo orders** — use `cancel_algo_order()` from `exchange.py`
 
 ## Maintenance Rule
 
@@ -258,136 +176,4 @@ All agents depend on `base_agent.py`. All config accessed via `settings.py` (whi
 - **CLAUDE.md max 300 lines** — if exceeding, compact by merging sections, removing verbose examples, or archiving stale content. Never remove critical gotchas or conventions
 - **Verify file existence** before referencing — if architecture tree is stale, update it
 
-<!-- rtk-instructions v2 -->
-# RTK (Rust Token Killer) - Token-Optimized Commands
-
-## Golden Rule
-
-**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
-
-**Important**: Even in command chains with `&&`, use `rtk`:
-```bash
-# ❌ Wrong
-git add . && git commit -m "msg" && git push
-
-# ✅ Correct
-rtk git add . && rtk git commit -m "msg" && rtk git push
-```
-
-## RTK Commands by Workflow
-
-### Build & Compile (80-90% savings)
-```bash
-rtk cargo build         # Cargo build output
-rtk cargo check         # Cargo check output
-rtk cargo clippy        # Clippy warnings grouped by file (80%)
-rtk tsc                 # TypeScript errors grouped by file/code (83%)
-rtk lint                # ESLint/Biome violations grouped (84%)
-rtk prettier --check    # Files needing format only (70%)
-rtk next build          # Next.js build with route metrics (87%)
-```
-
-### Test (90-99% savings)
-```bash
-rtk cargo test          # Cargo test failures only (90%)
-rtk vitest run          # Vitest failures only (99.5%)
-rtk playwright test     # Playwright failures only (94%)
-rtk test <cmd>          # Generic test wrapper - failures only
-```
-
-### Git (59-80% savings)
-```bash
-rtk git status          # Compact status
-rtk git log             # Compact log (works with all git flags)
-rtk git diff            # Compact diff (80%)
-rtk git show            # Compact show (80%)
-rtk git add             # Ultra-compact confirmations (59%)
-rtk git commit          # Ultra-compact confirmations (59%)
-rtk git push            # Ultra-compact confirmations
-rtk git pull            # Ultra-compact confirmations
-rtk git branch          # Compact branch list
-rtk git fetch           # Compact fetch
-rtk git stash           # Compact stash
-rtk git worktree        # Compact worktree
-```
-
-Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
-
-### GitHub (26-87% savings)
-```bash
-rtk gh pr view <num>    # Compact PR view (87%)
-rtk gh pr checks        # Compact PR checks (79%)
-rtk gh run list         # Compact workflow runs (82%)
-rtk gh issue list       # Compact issue list (80%)
-rtk gh api              # Compact API responses (26%)
-```
-
-### JavaScript/TypeScript Tooling (70-90% savings)
-```bash
-rtk pnpm list           # Compact dependency tree (70%)
-rtk pnpm outdated       # Compact outdated packages (80%)
-rtk pnpm install        # Compact install output (90%)
-rtk npm run <script>    # Compact npm script output
-rtk npx <cmd>           # Compact npx command output
-rtk prisma              # Prisma without ASCII art (88%)
-```
-
-### Files & Search (60-75% savings)
-```bash
-rtk ls <path>           # Tree format, compact (65%)
-rtk read <file>         # Code reading with filtering (60%)
-rtk grep <pattern>      # Search grouped by file (75%)
-rtk find <pattern>      # Find grouped by directory (70%)
-```
-
-### Analysis & Debug (70-90% savings)
-```bash
-rtk err <cmd>           # Filter errors only from any command
-rtk log <file>          # Deduplicated logs with counts
-rtk json <file>         # JSON structure without values
-rtk deps                # Dependency overview
-rtk env                 # Environment variables compact
-rtk summary <cmd>       # Smart summary of command output
-rtk diff                # Ultra-compact diffs
-```
-
-### Infrastructure (85% savings)
-```bash
-rtk docker ps           # Compact container list
-rtk docker images       # Compact image list
-rtk docker logs <c>     # Deduplicated logs
-rtk kubectl get         # Compact resource list
-rtk kubectl logs        # Deduplicated pod logs
-```
-
-### Network (65-70% savings)
-```bash
-rtk curl <url>          # Compact HTTP responses (70%)
-rtk wget <url>          # Compact download output (65%)
-```
-
-### Meta Commands
-```bash
-rtk gain                # View token savings statistics
-rtk gain --history      # View command history with savings
-rtk discover            # Analyze Claude Code sessions for missed RTK usage
-rtk proxy <cmd>         # Run command without filtering (for debugging)
-rtk init                # Add RTK instructions to CLAUDE.md
-rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
-```
-
-## Token Savings Overview
-
-| Category | Commands | Typical Savings |
-|----------|----------|-----------------|
-| Tests | vitest, playwright, cargo test | 90-99% |
-| Build | next, tsc, lint, prettier | 70-87% |
-| Git | status, log, diff, add, commit | 59-80% |
-| GitHub | gh pr, gh run, gh issue | 26-87% |
-| Package Managers | pnpm, npm, npx | 70-90% |
-| Files | ls, read, grep, find | 60-75% |
-| Infrastructure | docker, kubectl | 85% |
-| Network | curl, wget | 65-70% |
-
-Overall average: **60-90% token reduction** on common development operations.
-<!-- /rtk-instructions -->
+<!-- RTK: See ~/.claude/RTK.md for RTK commands. Always prefix with `rtk`. -->

@@ -25,6 +25,8 @@ from src.agents.llm.analyst_agent import run_analyst
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
 from src.utils.kill_switch import check_kill_switch
+from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.trade_utils import close_trade
 
 
 class TradingBot:
@@ -146,7 +148,7 @@ class TradingBot:
                         if result.action == 'OPEN':
                             overlap_tag = " [OVERLAP]" if risk.entry_adjusted else ""
                             self.send_notification_sync(
-                                f"Paper {decision.action} | {symbol}{overlap_tag}\n"
+                                f"{get_mode_label()} {decision.action} | {symbol}{overlap_tag}\n"
                                 f"Entry: ${risk.entry_price:,.2f}\n"
                                 f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                                 f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
@@ -219,8 +221,7 @@ class TradingBot:
                 )
                 return
 
-            testnet_label = "TESTNET" if settings.USE_TESTNET else "MAINNET"
-            logger.warning(f"LIVE MODE AKTIF — {testnet_label} — uang sungguhan terlibat!")
+            logger.warning(f"LIVE MODE AKTIF — {get_mode_label()} — uang sungguhan terlibat!")
 
         logger.info(f"Pairs: {', '.join(self.pairs)}")
 
@@ -323,9 +324,7 @@ class TradingBot:
                 for trade in open_trades:
                     if trade.pair not in active_pairs:
                         # Trade open di DB tapi tidak di Binance — mark reconciled
-                        trade.status = 'CLOSED'
-                        trade.close_reason = 'RECONCILED'
-                        trade.close_timestamp = datetime.now(timezone.utc)
+                        close_trade(trade, 'RECONCILED')
                         logger.warning(
                             f"Reconciled: Trade {trade.id} ({trade.pair}) — "
                             f"no position on Binance"

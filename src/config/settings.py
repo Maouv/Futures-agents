@@ -40,8 +40,8 @@ class Settings(BaseSettings):
         """Pastikan credential production ada jika live+mainnet."""
         from src.config.config_loader import load_system_config
         system = load_system_config()
-        execution_mode = system.get('execution_mode', 'paper')
-        use_testnet = system.get('use_testnet', False)
+        execution_mode = system['execution_mode']
+        use_testnet = system['use_testnet']
 
         if execution_mode == 'live' and not use_testnet:
             if v is None:
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
         """Pastikan credential testnet ada jika live+testnet."""
         from src.config.config_loader import load_system_config
         system = load_system_config()
-        execution_mode = system.get('execution_mode', 'paper')
-        use_testnet = system.get('use_testnet', False)
+        execution_mode = system['execution_mode']
+        use_testnet = system['use_testnet']
 
         if execution_mode == 'live' and use_testnet:
             if v is None:
@@ -78,19 +78,19 @@ class Settings(BaseSettings):
 
         # CEREBRAS_API_KEY
         if self.CEREBRAS_API_KEY is None:
-            val = secrets.get('cerebras_api_key', '')
+            val = secrets['cerebras_api_key']
             if val:
                 object.__setattr__(self, 'CEREBRAS_API_KEY', SecretStr(val))
 
         # GROQ_API_KEY
         if self.GROQ_API_KEY is None:
-            val = secrets.get('groq_api_key', '')
+            val = secrets['groq_api_key']
             if val:
                 object.__setattr__(self, 'GROQ_API_KEY', SecretStr(val))
 
         # CONCIERGE_API_KEY
         if self.CONCIERGE_API_KEY is None:
-            val = secrets.get('concierge_api_key', '')
+            val = secrets['concierge_api_key']
             if val:
                 object.__setattr__(self, 'CONCIERGE_API_KEY', SecretStr(val))
 
@@ -102,7 +102,7 @@ class Settings(BaseSettings):
         if override is not None:
             return override
         from src.config.config_loader import load_system_config
-        return load_system_config().get('execution_mode', 'paper')
+        return load_system_config()['execution_mode']
 
     @EXECUTION_MODE.setter
     def EXECUTION_MODE(self, value: str):
@@ -115,7 +115,7 @@ class Settings(BaseSettings):
         if override is not None:
             return override
         from src.config.config_loader import load_system_config
-        return load_system_config().get('use_testnet', False)
+        return load_system_config()['use_testnet']
 
     @USE_TESTNET.setter
     def USE_TESTNET(self, value: bool):
@@ -125,166 +125,166 @@ class Settings(BaseSettings):
     @property
     def ENVIRONMENT(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('environment', 'production')
+        return load_system_config()['environment']
 
     @property
     def CONFIRM_MAINNET(self) -> bool:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('confirm_mainnet', False)
+        return load_system_config()['confirm_mainnet']
 
     @property
     def TELEGRAM_CHAT_ID(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('telegram_chat_id', '')
+        return load_system_config()['telegram_chat_id']
 
     @property
     def BINANCE_REST_URL(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('binance_rest_url', 'https://fapi.binance.com')
+        return load_system_config()['binance_rest_url']
 
     @property
     def BINANCE_WS_URL(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('binance_ws_url', 'wss://fstream.binance.com/ws')
+        return load_system_config()['binance_ws_url']
 
     @property
     def BINANCE_TESTNET_URL(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('binance_testnet_url', 'https://testnet.binancefuture.com')
+        return load_system_config()['binance_testnet_url']
 
     @property
     def BINANCE_TESTNET_WS_URL(self) -> str:
         from src.config.config_loader import load_system_config
-        return load_system_config().get('binance_testnet_ws_url', 'wss://stream.binancefuture.com/ws')
+        return load_system_config()['binance_testnet_ws_url']
 
     # ── Trading Properties (from config.json) ───────────────────────────────
 
     @property
     def FUTURES_DEFAULT_LEVERAGE(self) -> int:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('leverage', 10)
+        return load_trading_config()['leverage']
 
     @property
     def FUTURES_MARGIN_TYPE(self) -> str:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('margin_type', 'isolated')
+        return load_trading_config()['margin_type']
 
     @property
     def RISK_PER_TRADE_USD(self) -> float:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('risk_per_trade_usd', 10.0)
+        return load_trading_config()['risk_per_trade_usd']
 
     @property
     def RISK_REWARD_RATIO(self) -> float:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('risk_reward_ratio', 2.0)
+        return load_trading_config()['risk_reward_ratio']
 
     @property
     def MAX_OPEN_POSITIONS(self) -> int:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('max_open_positions', 1)
+        return load_trading_config()['max_open_positions']
 
     @property
     def ORDER_EXPIRY_CANDLES(self) -> int:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('order_expiry_candles', 48)
+        return load_trading_config()['order_expiry_candles']
 
     @property
     def DISABLE_SESSION_FILTER(self) -> bool:
         from src.config.config_loader import load_trading_config
-        return load_trading_config().get('disable_session_filter', True)
+        return load_trading_config()['disable_session_filter']
 
     @property
     def TRAILING_STOP_ENABLED(self) -> bool:
         from src.config.config_loader import load_trailing_stop_config
-        return load_trailing_stop_config().get('enabled', False)
+        return load_trailing_stop_config()['enabled']
 
     @property
     def TRAILING_STOP_STEPS(self) -> list:
         from src.config.config_loader import load_trailing_stop_config
-        return load_trailing_stop_config().get('steps', [])
+        return load_trailing_stop_config()['steps']
 
     # ── LLM Properties (from config.json) ──────────────────────────────────
 
     @property
     def CEREBRAS_BASE_URL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('base_url', 'https://api.cerebras.ai/v1/chat/completions')
+        return load_llm_config()['cerebras']['base_url']
 
     @property
     def CEREBRAS_MODEL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('model', 'qwen-3-235b-a22b-instruct-2507')
+        return load_llm_config()['cerebras']['model']
 
     @property
     def LLM_CEREBRAS_MAX_CONCURRENT(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('max_concurrent', 2)
+        return load_llm_config()['cerebras']['max_concurrent']
 
     @property
     def LLM_CEREBRAS_RPM(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('rpm', 30)
+        return load_llm_config()['cerebras']['rpm']
 
     @property
     def LLM_CEREBRAS_MIN_INTERVAL(self) -> float:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('min_interval', 2.0)
+        return load_llm_config()['cerebras']['min_interval']
 
     @property
     def LLM_RETRY_ON_429(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('retry_on_429', 2)
+        return load_llm_config()['cerebras']['retry_on_429']
 
     @property
     def LLM_GROQ_MAX_CONCURRENT(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('groq', {}).get('max_concurrent', 3)
+        return load_llm_config()['groq']['max_concurrent']
 
     @property
     def LLM_GROQ_RPM(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('groq', {}).get('rpm', 30)
+        return load_llm_config()['groq']['rpm']
 
     @property
     def LLM_GROQ_MIN_INTERVAL(self) -> float:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('groq', {}).get('min_interval', 1.0)
+        return load_llm_config()['groq']['min_interval']
 
     @property
     def GROQ_BASE_URL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('groq', {}).get('base_url', 'https://api.groq.com/openai/v1/chat/completions')
+        return load_llm_config()['groq']['base_url']
 
     @property
     def GROQ_MODEL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('groq', {}).get('model', 'llama-3.1-8b-instant')
+        return load_llm_config()['groq']['model']
 
     @property
     def CONCIERGE_BASE_URL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('concierge', {}).get('base_url', 'https://api.groq.com/openai/v1/chat/completions')
+        return load_llm_config()['concierge']['base_url']
 
     @property
     def CONCIERGE_MODEL(self) -> str:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('concierge', {}).get('model', 'openai/gpt-oss-120b')
+        return load_llm_config()['concierge']['model']
 
     @property
     def CONCIERGE_TIMEOUT_SEC(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('concierge', {}).get('timeout_sec', 600)
+        return load_llm_config()['concierge']['timeout_sec']
 
     @property
     def CONCIERGE_MAX_TOKENS(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('concierge', {}).get('max_tokens', 5000)
+        return load_llm_config()['concierge']['max_tokens']
 
     @property
     def LLM_FAST_TIMEOUT_SEC(self) -> int:
         from src.config.config_loader import load_llm_config
-        return load_llm_config().get('cerebras', {}).get('timeout_sec', 45)
+        return load_llm_config()['cerebras']['timeout_sec']
 
 
 # Singleton — import ini di mana saja

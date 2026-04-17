@@ -14,13 +14,8 @@ from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.kill_switch import create_kill_switch, remove_kill_switch, check_kill_switch
 from src.utils.logger import logger
-
-
-def _get_current_mode() -> str:
-    """Return current execution mode tag: 'paper', 'testnet', or 'mainnet'."""
-    if settings.EXECUTION_MODE != "live":
-        return "paper"
-    return "testnet" if settings.USE_TESTNET else "mainnet"
+from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.trade_utils import close_trade
 
 
 def _cleanup_mode_trades(mode: str) -> int:
@@ -91,9 +86,7 @@ def _cleanup_mode_trades(mode: str) -> int:
                     logger.error(f"Error during testnet cleanup for trade {trade.id}: {e}")
 
             # Update DB — baik paper maupun testnet
-            trade.status = 'CLOSED'
-            trade.close_reason = 'MODE_SWITCH'
-            trade.close_timestamp = datetime.now(timezone.utc)
+            close_trade(trade, 'MODE_SWITCH')
             closed_count += 1
 
     return closed_count
@@ -102,7 +95,7 @@ def _cleanup_mode_trades(mode: str) -> int:
 def cmd_menu() -> str:
     """Tampilkan menu + ringkasan cepat (filtered by current mode)."""
     kill_status = "ON" if check_kill_switch() else "OFF"
-    mode = "paper" if settings.EXECUTION_MODE != "live" else ("testnet" if settings.USE_TESTNET else "mainnet")
+    mode = get_current_mode()
     with get_session() as db:
         open_count = db.query(PaperTrade).filter(
             PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
@@ -129,15 +122,13 @@ def cmd_menu() -> str:
 
 
 def cmd_get_status() -> str:
-    mode = settings.EXECUTION_MODE.upper()
-    testnet = "TESTNET" if settings.USE_TESTNET else "MAINNET"
     kill = "ON" if check_kill_switch() else "OFF"
     trailing = "ON" if settings.TRAILING_STOP_ENABLED else "OFF"
 
     if settings.EXECUTION_MODE == "live":
         return (
             f"Bot: RUNNING\n"
-            f"Mode: LIVE ({testnet})\n"
+            f"Mode: LIVE ({get_mode_label()})\n"
             f"Kill switch: {kill}\n"
             f"Leverage: {settings.FUTURES_DEFAULT_LEVERAGE}x\n"
             f"Max positions/pair: {settings.MAX_OPEN_POSITIONS}\n"
@@ -154,11 +145,8 @@ def cmd_get_status() -> str:
 
 def cmd_get_open_trades() -> str:
     """Open trades, filtered by current execution mode."""
-    if settings.EXECUTION_MODE != "live":
-        mode = "paper"
-    else:
-        mode = "testnet" if settings.USE_TESTNET else "mainnet"
-    mode_label = mode.upper()
+    mode = get_current_mode()
+    mode_label = get_mode_label()
 
     with get_session() as db:
         trades = db.query(PaperTrade).filter(
@@ -183,11 +171,7 @@ def cmd_get_open_trades() -> str:
 def cmd_get_performance(mode: str = "") -> str:
     """Performance stats. /perf = current mode, /perf paper, /perf testnet, /perf mainnet"""
     if mode == "":
-        # Default ke mode aktif saat ini
-        if settings.EXECUTION_MODE != "live":
-            mode = "paper"
-        else:
-            mode = "testnet" if settings.USE_TESTNET else "mainnet"
+        mode = get_current_mode()
     elif mode not in ('paper', 'testnet', 'mainnet'):
         return "Gunakan: /perf [paper|testnet|mainnet]"
 
@@ -213,10 +197,7 @@ def cmd_get_performance(mode: str = "") -> str:
 def cmd_get_trade_history(mode: str = "") -> str:
     """Trade history. /history = current mode, /history paper, /history testnet, /history mainnet"""
     if mode == "":
-        if settings.EXECUTION_MODE != "live":
-            mode = "paper"
-        else:
-            mode = "testnet" if settings.USE_TESTNET else "mainnet"
+        mode = get_current_mode()
     elif mode not in ('paper', 'testnet', 'mainnet'):
         return "Gunakan: /history [paper|testnet|mainnet]"
 
@@ -264,7 +245,7 @@ def cmd_switch_mode(mode: str = "") -> str:
     """
     from src.utils.exchange import reset_exchange
     mode = mode.strip().lower()
-    current_mode = _get_current_mode()
+    current_mode = get_current_mode()
 
     if mode == "paper":
         if current_mode == "mainnet":
@@ -323,7 +304,7 @@ def cmd_switch_mode(mode: str = "") -> str:
         return msg
 
     else:
-        current = _get_current_mode().upper()
+        current = get_current_mode().upper()
         return (
             f"Mode saat ini: {current}\n"
             f"Gunakan:\n"

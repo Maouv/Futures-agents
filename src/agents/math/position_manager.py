@@ -12,6 +12,7 @@ from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import cancel_algo_order, place_algo_order, reset_exchange
 from src.utils.logger import logger
+from src.utils.trade_utils import calculate_pnl, close_trade
 
 
 def calculate_liquidation_price(entry_price: float, side: str, leverage: int) -> float:
@@ -216,16 +217,9 @@ def _emergency_close(trade: PaperTrade, db) -> None:
         )
         close_price = float(close_order.get('average', close_order.get('price', trade.entry_price)))
 
-        if trade.side == 'LONG':
-            pnl = (close_price - trade.entry_price) * trade.size
-        else:
-            pnl = (trade.entry_price - close_price) * trade.size
+        pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
-        trade.status = 'CLOSED'
-        trade.close_reason = 'EMERGENCY_CLOSE_SL_FAIL'
-        trade.close_price = close_price
-        trade.pnl = pnl
-        trade.close_timestamp = datetime.now(timezone.utc)
+        close_trade(trade, 'EMERGENCY_CLOSE_SL_FAIL', close_price, pnl)
 
         logger.info(
             f"EMERGENCY CLOSE (trailing) | Trade {trade.id} | "
