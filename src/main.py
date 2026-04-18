@@ -11,7 +11,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.config.settings import settings
-from src.data.storage import init_db, migrate_db, PaperTrade, get_session
+from src.data.storage import (
+    init_db, migrate_db, PaperTrade, get_session,
+    check_db_integrity, backup_db, cleanup_stranded_trades
+)
 from src.data.ohlcv_fetcher import fetch_ohlcv, log_weight_summary
 from src.config.config_loader import load_pairs
 from src.agents.math.trend_agent import TrendAgent
@@ -250,12 +253,30 @@ class TradingBot:
         init_db()
         migrate_db()
 
+        # ── DB Integrity Check ───────────────────────────────────────────
+        if not check_db_integrity():
+            logger.critical("DB CORRUPT — stopping bot. Manual intervention required!")
+            return
+
+        # ── Cleanup Stranded Trades ───────────────────────────────────────
+        cleanup_count = cleanup_stranded_trades()
+        if cleanup_count > 0:
+            self.send_notification_sync(
+                f"⚠️ Startup Cleanup: {cleanup_count} stranded trades marked FAILED"
+            )
+
+        # ── Auto-Backup ───────────────────────────────────────────────────
+        backup_db()
+
         # Log weight estimate (sekali saat startup)
         log_weight_summary(len(self.pairs))
 
         # ── Position Reconciliation (live mode) ────────────────────────────
         if settings.EXECUTION_MODE == "live":
             self._reconcile_positions()
+
+        # ── Mode Switch Alert ─────────────────────────────────────────────
+        self._check_mode_switch_trades()
 
         # ── Start User Data Stream (live mode) ─────────────────────────────
         if settings.EXECUTION_MODE == "live":
@@ -401,6 +422,34 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Position reconciliation failed: {e}")
             logger.warning("Proceeding without reconciliation — monitor manually!")
+
+    def _check_mode_switch_trades(self) -> None:
+        """
+        Deteksi trades dari mode berbeda saat startup.
+        Alert jika ada trades yang mungkin orphan akibat mode switch.
+        """
+        current_mode = get_current_mode()
+
+        with get_session() as db:
+            other_mode_trades = db.query(PaperTrade).filter(
+                PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+                PaperTrade.execution_mode != current_mode,
+                PaperTrade.execution_mode.isnot(None),
+            ).all()
+
+            if other_mode_trades:
+                trade_info = [
+                    f"  - Trade {t.id}: {t.pair} {t.side} ({t.execution_mode})"
+                    for t in other_mode_trades
+                ]
+                msg = (
+                    f"⚠️ MODE SWITCH WARNING\n"
+                    f"Current mode: {current_mode.upper()}\n"
+                    f"Found {len(other_mode_trades)} trades from other modes:\n"
+                    + "\n".join(trade_info)
+                )
+                logger.warning(msg)
+                self.send_notification_sync(msg)
 
 
 def main():

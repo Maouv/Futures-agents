@@ -247,13 +247,43 @@ class ExecutionAgent(BaseAgent):
         """
         Live mode (normal path): Place LIMIT order di OB midpoint, store PENDING_ENTRY di DB.
         SL/TP dipasang SETELAH limit order FILL (di check_pending_orders).
-        """
-        try:
-            entry_price = risk_result.entry_price
-            side = 'buy' if reversal_result.signal == "LONG" else 'sell'
-            amount = exchange.amount_to_precision(symbol, risk_result.position_size)
-            price = exchange.price_to_precision(symbol, entry_price)
 
+        WRITE-THEN-EXCHANGE PATTERN:
+        1. INSERT PENDING_SUBMIT dulu (tanpa order_id)
+        2. Panggil exchange.create_order()
+        3. Jika sukses → UPDATE ke PENDING_ENTRY dengan order_id
+        4. Jika gagal → UPDATE ke FAILED
+        """
+        entry_price = risk_result.entry_price
+        side = 'buy' if reversal_result.signal == "LONG" else 'sell'
+        amount = exchange.amount_to_precision(symbol, risk_result.position_size)
+        price = exchange.price_to_precision(symbol, entry_price)
+
+        # ── Step 1: INSERT PENDING_SUBMIT dulu ─────────────────────────────
+        with get_session() as db:
+            trade = PaperTrade(
+                pair=symbol,
+                side=reversal_result.signal,
+                entry_price=risk_result.entry_price,
+                sl_price=risk_result.sl_price,
+                tp_price=risk_result.tp_price,
+                size=float(amount),
+                leverage=risk_result.leverage,
+                status='PENDING_SUBMIT',
+                entry_timestamp=datetime.now(timezone.utc),
+                execution_mode=get_current_mode(),
+                exchange_order_id=None,  # Belum ada
+            )
+            db.add(trade)
+            db.flush()
+            trade_id = trade.id
+
+        self._log(
+            f"PENDING_SUBMIT | Trade {trade_id} | {symbol} {side.upper()} @ {price}"
+        )
+
+        # ── Step 2: Place order di exchange ───────────────────────────────
+        try:
             self._log(
                 f"Placing LIMIT {side.upper()} | {symbol} | "
                 f"Price: {price} | Amount: {amount}"
@@ -277,24 +307,12 @@ class ExecutionAgent(BaseAgent):
                 f"{symbol} {side.upper()} @ {price}"
             )
 
-            # ── Store PENDING_ENTRY di DB ─────────────────────────────────
+            # ── Step 3: UPDATE ke PENDING_ENTRY dengan order_id ───────────
             with get_session() as db:
-                trade = PaperTrade(
-                    pair=symbol,
-                    side=reversal_result.signal,
-                    entry_price=risk_result.entry_price,
-                    sl_price=risk_result.sl_price,
-                    tp_price=risk_result.tp_price,
-                    size=float(amount),
-                    leverage=risk_result.leverage,
-                    status='PENDING_ENTRY',
-                    entry_timestamp=datetime.now(timezone.utc),
-                    execution_mode=get_current_mode(),
-                    exchange_order_id=exchange_order_id,
-                )
-                db.add(trade)
-                db.flush()
-                trade_id = trade.id
+                db_trade = db.query(PaperTrade).get(trade_id)
+                if db_trade:
+                    db_trade.status = 'PENDING_ENTRY'
+                    db_trade.exchange_order_id = exchange_order_id
 
             return ExecutionResult(
                 action="PENDING",
@@ -303,6 +321,15 @@ class ExecutionAgent(BaseAgent):
             )
 
         except (ccxt.InsufficientFunds, ccxt.InvalidOrder, ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
+            # ── Step 4: UPDATE ke FAILED jika exchange gagal ───────────────
+            self._log_error(f"Exchange error for trade {trade_id}: {e}")
+            with get_session() as db:
+                db_trade = db.query(PaperTrade).get(trade_id)
+                if db_trade:
+                    db_trade.status = 'FAILED'
+                    db_trade.close_reason = 'EXCHANGE_ERROR'
+                    db_trade.close_timestamp = datetime.now(timezone.utc)
+
             return self._handle_ccxt_error(e, "live limit execution")
 
     def _execute_live_market(

@@ -13,3 +13,11 @@ def get_current_mode() -> str:
 def get_mode_label() -> str:
     """Return uppercase mode label for display: 'PAPER', 'TESTNET', 'MAINNET'."""
     return get_current_mode().upper()
+
+
+def init_mode() -> None:
+    """Initialize and log execution mode at startup."""
+    mode = get_current_mode()
+    label = get_mode_label()
+    from src.utils.logger import logger
+    logger.info(f"Execution mode initialized: {label} ({mode})")

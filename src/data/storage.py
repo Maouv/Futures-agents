@@ -3,10 +3,12 @@ storage.py — SQLAlchemy models dan session factory.
 Semua akses database WAJIB melalui session dari get_session().
 DILARANG menulis raw SQL string.
 """
+import shutil
 import time
 from datetime import datetime, timezone
 from typing import Generator
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, String, Text,
@@ -176,6 +178,114 @@ def migrate_db() -> None:
     logger.info("Database migration completed.")
 
 
+def check_db_integrity() -> bool:
+    """
+    Jalankan PRAGMA quick_check untuk deteksi corruption.
+    Return True jika OK, False jika corrupt.
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA quick_check(2)")).scalar()
+            if result == "ok":
+                logger.info("DB integrity check: OK")
+                return True
+            else:
+                logger.critical(f"DB CORRUPT: {result}")
+                return False
+    except Exception as e:
+        logger.critical(f"DB integrity check failed: {e}")
+        return False
+
+
+def backup_db() -> bool:
+    """
+    Backup database ke data/backups/ dengan timestamp.
+    Rolling backup: simpan 7 terakhir.
+    """
+    backup_dir = Path("data/backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    db_path = Path("data/trading.db")
+    if not db_path.exists():
+        logger.warning("No database file to backup")
+        return False
+
+    # Integrity check sebelum backup
+    if not check_db_integrity():
+        logger.error("DB corrupt, skipping backup")
+        return False
+
+    # Create backup dengan timestamp
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"trading_{timestamp}.db"
+
+    try:
+        # WAL checkpoint sebelum backup
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+            conn.commit()
+
+        shutil.copy2(db_path, backup_path)
+        logger.info(f"DB backed up to {backup_path}")
+
+        # Rolling cleanup: keep last 7
+        backups = sorted(backup_dir.glob("trading_*.db"))
+        for old_backup in backups[:-7]:
+            old_backup.unlink()
+            logger.info(f"Removed old backup: {old_backup}")
+
+        return True
+    except Exception as e:
+        logger.error(f"Backup failed: {e}")
+        return False
+
+
+def cleanup_stranded_trades() -> int:
+    """
+    Cleanup stranded trades saat startup:
+    - PENDING_SUBMIT > 5 menit → FAILED
+    - PENDING_ENTRY tanpa exchange_order_id → FAILED
+
+    Return jumlah trades yang di-cleanup.
+    """
+    from datetime import timedelta
+
+    cleanup_count = 0
+    five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    with get_session() as db:
+        # PENDING_SUBMIT > 5 menit
+        stranded_submit = db.query(PaperTrade).filter(
+            PaperTrade.status == 'PENDING_SUBMIT',
+            PaperTrade.entry_timestamp < five_min_ago,
+        ).all()
+
+        for trade in stranded_submit:
+            trade.status = 'FAILED'
+            trade.close_reason = 'EXCHANGE_TIMEOUT'
+            trade.close_timestamp = datetime.now(timezone.utc)
+            cleanup_count += 1
+            logger.warning(f"Cleaned up stranded PENDING_SUBMIT: Trade {trade.id}")
+
+        # PENDING_ENTRY tanpa exchange_order_id
+        stranded_entry = db.query(PaperTrade).filter(
+            PaperTrade.status == 'PENDING_ENTRY',
+            PaperTrade.exchange_order_id.is_(None),
+        ).all()
+
+        for trade in stranded_entry:
+            trade.status = 'FAILED'
+            trade.close_reason = 'NO_ORDER_ID'
+            trade.close_timestamp = datetime.now(timezone.utc)
+            cleanup_count += 1
+            logger.warning(f"Cleaned up PENDING_ENTRY without order_id: Trade {trade.id}")
+
+        if cleanup_count > 0:
+            logger.info(f"Cleanup complete: {cleanup_count} stranded trades marked FAILED")
+
+    return cleanup_count
+
+
 @contextmanager
 def get_session(max_retries: int = 3) -> Generator[Session, None, None]:
     """
@@ -211,3 +321,4 @@ def get_session(max_retries: int = 3) -> Generator[Session, None, None]:
     # Should not reach here, but just in case
     if last_error:
         raise last_error
+
