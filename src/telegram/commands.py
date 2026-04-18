@@ -92,24 +92,51 @@ def _cleanup_mode_trades(mode: str) -> int:
     return closed_count
 
 
+def _get_mode_stats(mode: str) -> dict:
+    """Get open count, closed count, total_pnl, win_rate for a mode (SQL aggregation)."""
+    from sqlalchemy import func
+
+    with get_session() as db:
+        open_count = db.query(func.count(PaperTrade.id)).filter(
+            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+            PaperTrade.execution_mode == mode,
+        ).scalar() or 0
+
+        closed_count = db.query(func.count(PaperTrade.id)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == mode,
+        ).scalar() or 0
+
+        total_pnl = db.query(func.sum(PaperTrade.pnl)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == mode,
+        ).scalar() or 0
+
+        wins = db.query(func.count(PaperTrade.id)).filter(
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.execution_mode == mode,
+            PaperTrade.pnl > 0,
+        ).scalar() or 0
+
+        win_rate = (wins / closed_count * 100) if closed_count else 0
+
+        return {
+            'open_count': open_count,
+            'closed_count': closed_count,
+            'total_pnl': total_pnl,
+            'win_rate': win_rate,
+        }
+
+
 def cmd_menu() -> str:
     """Tampilkan menu + ringkasan cepat (filtered by current mode)."""
     kill_status = "ON" if check_kill_switch() else "OFF"
     mode = get_current_mode()
-    with get_session() as db:
-        open_count = db.query(PaperTrade).filter(
-            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-            PaperTrade.execution_mode == mode,
-        ).count()
-        closed = db.query(PaperTrade).filter(
-            PaperTrade.status == 'CLOSED',
-            PaperTrade.execution_mode == mode,
-        ).all()
-        total_pnl = sum(t.pnl or 0 for t in closed)
+    stats = _get_mode_stats(mode)
 
     return (
         f"== MENU [{mode.upper()}] ==\n"
-        f"Open: {open_count} | PnL: ${total_pnl:.2f} | Kill: {kill_status}\n"
+        f"Open: {stats['open_count']} | PnL: ${stats['total_pnl']:.2f} | Kill: {kill_status}\n"
         f"\n"
         f"/status  — Mode, leverage, kill switch\n"
         f"/trades  — Open trades (mode aktif)\n"
@@ -176,21 +203,16 @@ def cmd_get_performance(mode: str = "") -> str:
         return "Gunakan: /perf [paper|testnet|mainnet]"
 
     mode_label = mode.upper()
-    with get_session() as db:
-        query = db.query(PaperTrade).filter(PaperTrade.status == 'CLOSED')
-        query = query.filter(PaperTrade.execution_mode == mode)
+    stats = _get_mode_stats(mode)
 
-        closed = query.all()
-        if not closed:
-            return f"Belum ada closed trades [{mode_label}]."
-        total_pnl = sum(t.pnl or 0 for t in closed)
-        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
-        wr = wins / len(closed) * 100
+    if stats['closed_count'] == 0:
+        return f"Belum ada closed trades [{mode_label}]."
+
     return (
         f"Performance [{mode_label}]:\n"
-        f"Total trades: {len(closed)}\n"
-        f"Win rate: {wr:.1f}%\n"
-        f"Total PnL: ${total_pnl:.2f}"
+        f"Total trades: {stats['closed_count']}\n"
+        f"Win rate: {stats['win_rate']:.1f}%\n"
+        f"Total PnL: ${stats['total_pnl']:.2f}"
     )
 
 

@@ -55,28 +55,12 @@ def _get_trade_context() -> str:
     """Ambil summary trades untuk context Concierge, dipisah per mode."""
     from sqlalchemy import func
     from src.data.storage import PaperTrade, get_session
-    with get_session() as db:
-        # Paper mode stats — SQL aggregation, no .all()
-        paper_open = db.query(func.count(PaperTrade.id)).filter(
-            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-            PaperTrade.execution_mode == 'paper',
-        ).scalar() or 0
-        paper_closed_count = db.query(func.count(PaperTrade.id)).filter(
-            PaperTrade.status == 'CLOSED',
-            PaperTrade.execution_mode == 'paper',
-        ).scalar() or 0
-        paper_pnl = db.query(func.sum(PaperTrade.pnl)).filter(
-            PaperTrade.status == 'CLOSED',
-            PaperTrade.execution_mode == 'paper',
-        ).scalar() or 0
-        paper_wins = db.query(func.count(PaperTrade.id)).filter(
-            PaperTrade.status == 'CLOSED',
-            PaperTrade.execution_mode == 'paper',
-            PaperTrade.pnl > 0,
-        ).scalar() or 0
-        paper_wr = (paper_wins / paper_closed_count * 100) if paper_closed_count else 0
+    from src.telegram.commands import _get_mode_stats
 
-        # Live mode stats (testnet + mainnet) — SQL aggregation
+    paper = _get_mode_stats('paper')
+
+    # Live = testnet + mainnet (aggregate)
+    with get_session() as db:
         live_open = db.query(func.count(PaperTrade.id)).filter(
             PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
             PaperTrade.execution_mode.in_(['testnet', 'mainnet']),
@@ -97,7 +81,7 @@ def _get_trade_context() -> str:
         live_wr = (live_wins / live_closed_count * 100) if live_closed_count else 0
 
     return (
-        f"[PAPER] Open: {paper_open} | Closed: {paper_closed_count} | WR: {paper_wr:.1f}% | PnL: ${paper_pnl:.2f}\n"
+        f"[PAPER] Open: {paper['open_count']} | Closed: {paper['closed_count']} | WR: {paper['win_rate']:.1f}% | PnL: ${paper['total_pnl']:.2f}\n"
         f"[LIVE]  Open: {live_open} | Closed: {live_closed_count} | WR: {live_wr:.1f}% | PnL: ${live_pnl:.2f}"
     )
 
