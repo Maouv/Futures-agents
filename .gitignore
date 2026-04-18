@@ -33,3 +33,4 @@ data/rl_models/
 .serena/
 .rtk/
 .aider*
+.streamlit/

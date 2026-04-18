@@ -71,6 +71,29 @@ def _is_429(exc: Exception) -> bool:
     return False
 
 
+def _call_llm(client: openai.OpenAI, prompt: str) -> AnalystDecision:
+    """Single LLM call dengan rate limiter. Returns AnalystDecision."""
+    cerebras_limiter.acquire()
+    try:
+        response = client.chat.completions.create(
+            model=settings.CEREBRAS_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_tokens=200,
+        )
+        raw = response.choices[0].message.content
+        data = json.loads(raw)
+        return AnalystDecision(
+            action=data.get('action', 'SKIP'),
+            confidence=int(data.get('confidence', 50)),
+            reasoning=data.get('reasoning', ''),
+            source='llm',
+        )
+    finally:
+        cerebras_limiter.release()
+
+
 def run_analyst(
     trend: TrendResult,
     reversal: ReversalResult,
@@ -108,58 +131,15 @@ STRATEGY RULES:
 Respond in JSON only:
 {{"action": "LONG|SHORT|SKIP", "confidence": 0-100, "reasoning": "brief explanation"}}"""
 
-    try:
-        cerebras_limiter.acquire()
+    max_attempts = settings.LLM_RETRY_ON_429 + 1
+    for attempt in range(max_attempts):
         try:
-            response = client.chat.completions.create(
-                model=settings.CEREBRAS_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                response_format={"type": "json_object"},
-                max_tokens=200,
-            )
-            raw = response.choices[0].message.content
-            data = json.loads(raw)
-            return AnalystDecision(
-                action=data.get('action', 'SKIP'),
-                confidence=int(data.get('confidence', 50)),
-                reasoning=data.get('reasoning', ''),
-                source='llm',
-            )
-        finally:
-            cerebras_limiter.release()
-    except Exception as e:
-        if _is_429(e):
-            for attempt in range(settings.LLM_RETRY_ON_429):
+            return _call_llm(client, prompt)
+        except Exception as e:
+            if _is_429(e) and attempt < max_attempts - 1:
                 backoff = 2 ** attempt
                 logger.warning(f"[AnalystAgent] 429 rate limited. Retry {attempt + 1}/{settings.LLM_RETRY_ON_429} after {backoff}s")
                 time.sleep(backoff)
-                try:
-                    cerebras_limiter.acquire()
-                    try:
-                        response = client.chat.completions.create(
-                            model=settings.CEREBRAS_MODEL,
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.0,
-                            response_format={"type": "json_object"},
-                            max_tokens=200,
-                        )
-                        raw = response.choices[0].message.content
-                        data = json.loads(raw)
-                        return AnalystDecision(
-                            action=data.get('action', 'SKIP'),
-                            confidence=int(data.get('confidence', 50)),
-                            reasoning=data.get('reasoning', ''),
-                            source='llm',
-                        )
-                    finally:
-                        cerebras_limiter.release()
-                except Exception as retry_e:
-                    if _is_429(retry_e):
-                        continue
-                    logger.warning(f"[AnalystAgent] Retry {attempt + 1} error: {retry_e}. Falling back to rule-based.")
-                    return _rule_based_fallback(trend, reversal, confirmation)
-            logger.warning(f"[AnalystAgent] {settings.LLM_RETRY_ON_429} retries exhausted. Falling back to rule-based.")
-        else:
+                continue
             logger.warning(f"[AnalystAgent] API error: {e}. Falling back to rule-based.")
-        return _rule_based_fallback(trend, reversal, confirmation)
+            return _rule_based_fallback(trend, reversal, confirmation)

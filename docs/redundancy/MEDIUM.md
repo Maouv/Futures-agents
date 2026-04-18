@@ -1,22 +1,4 @@
-# Medium Severity Redundancy
-
-## 1. Default values duplikat: settings.py vs config_loader.py
-
-`config_loader.py` sudah punya `DEFAULT_SYSTEM`, `DEFAULT_TRADING`, `DEFAULT_LLM` dan merge via `{**DEFAULT, **user_config}`. Tapi `settings.py` hardcode default yang sama di setiap `@property`:
-
-```python
-# config_loader.py sudah return merged dict dengan default
-return load_system_config().get('execution_mode', 'paper')  # default 'paper' redundant
-```
-
-~25 property di `settings.py` punya fallback default yang tidak pernah terpakai.
-
-| File | Line |
-|------|------|
-| `src/config/settings.py` | 99-288 (semua @property) |
-| `src/config/config_loader.py` | 114-168 (DEFAULT_SYSTEM/TRADING/LLM) |
-
-**Fix:** Hapus redundant defaults dari `settings.py`, biarkan `config_loader` handle.
+#.
 
 ---
 

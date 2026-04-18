@@ -2,8 +2,8 @@
   "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "XRPUSDT"],
 
   "system": {
-    "execution_mode": "paper",
-    "use_testnet": false,
+    "execution_mode": "testnet",
+    "use_testnet": true,
     "environment": "production",
     "confirm_mainnet": false,
     "telegram_chat_id": "5112950656",
