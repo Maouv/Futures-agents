@@ -111,3 +111,105 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
                 )
 
     return closed
+
+
+def check_paper_pending(current_prices: Dict[str, Dict]) -> List[Dict]:
+    """
+    Cek PENDING_ENTRY paper trades — apakah sudah 'filled' atau expired.
+    Paper mode simulation untuk limit order fills (State 1/2).
+
+    Fill condition (menggunakan candle low/high):
+    - LONG: low <= entry_price (harga turun menyentuh limit)
+    - SHORT: high >= entry_price (harga naik menyentuh limit)
+
+    Expired: jika ORDER_EXPIRY_CANDLES H1 candles tercapai sebelum fill.
+
+    Args:
+        current_prices: Dictionary pair -> {high, low, close}
+
+    Returns:
+        List of dicts with fill/expired info per trade.
+    """
+    if settings.EXECUTION_MODE == "live":
+        return []
+
+    results = []
+
+    with get_session() as db:
+        pending_trades = db.query(PaperTrade).filter(
+            PaperTrade.status == 'PENDING_ENTRY',
+            PaperTrade.execution_mode == 'paper',
+        ).all()
+
+        if not pending_trades:
+            return results
+
+        logger.info(f"Memeriksa {len(pending_trades)} paper PENDING_ENTRY trade...")
+
+        for trade in pending_trades:
+            candle = current_prices.get(trade.pair)
+            if candle is None:
+                logger.warning(
+                    f"Harga untuk {trade.pair} tidak ditemukan, "
+                    f"skip pending check untuk trade {trade.id}"
+                )
+                continue
+
+            low = candle['low']
+            high = candle['high']
+
+            # ── Check Fill ────────────────────────────────────────────────
+            filled = False
+            if trade.side == 'LONG' and low <= trade.entry_price:
+                filled = True
+            elif trade.side == 'SHORT' and high >= trade.entry_price:
+                filled = True
+
+            if filled:
+                db.refresh(trade)
+                if trade.status != 'PENDING_ENTRY':
+                    logger.debug(f"Trade {trade.id} already handled. Skipping.")
+                    continue
+
+                trade.status = 'OPEN'
+                results.append({
+                    'trade_id': trade.id,
+                    'pair': trade.pair,
+                    'side': trade.side,
+                    'action': 'filled',
+                    'entry_price': trade.entry_price,
+                })
+                logger.info(
+                    f"PAPER PENDING FILLED | ID: {trade.id} | "
+                    f"{trade.pair} {trade.side} @ {trade.entry_price:.2f}"
+                )
+                continue
+
+            # ── Check Expiry ──────────────────────────────────────────────
+            if trade.entry_timestamp:
+                entry_ts = trade.entry_timestamp
+                if entry_ts.tzinfo is None:
+                    entry_ts = entry_ts.replace(tzinfo=timezone.utc)
+                hours_elapsed = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 3600
+                candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
+
+                if candles_elapsed >= settings.ORDER_EXPIRY_CANDLES:
+                    db.refresh(trade)
+                    if trade.status != 'PENDING_ENTRY':
+                        continue
+
+                    trade.status = 'EXPIRED'
+                    trade.close_reason = 'EXPIRED'
+                    trade.close_timestamp = datetime.now(timezone.utc)
+                    results.append({
+                        'trade_id': trade.id,
+                        'pair': trade.pair,
+                        'side': trade.side,
+                        'action': 'expired',
+                    })
+                    logger.info(
+                        f"PAPER PENDING EXPIRED | ID: {trade.id} | "
+                        f"{trade.pair} {trade.side} | Elapsed: {candles_elapsed:.1f} H1 candles"
+                    )
+
+    return results

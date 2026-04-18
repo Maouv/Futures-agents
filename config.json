@@ -2,7 +2,7 @@
   "pairs": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "XRPUSDT"],
 
   "system": {
-    "execution_mode": "testnet",
+    "execution_mode": "live",
     "use_testnet": true,
     "environment": "production",
     "confirm_mainnet": false,

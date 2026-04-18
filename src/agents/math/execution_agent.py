@@ -154,6 +154,11 @@ class ExecutionAgent(BaseAgent):
         """Paper mode: langsung INSERT ke DB dengan status='OPEN'."""
         try:
             with get_session() as db:
+                # State 1/2 (entry_adjusted=False) → PENDING_ENTRY, tunggu harga sentuh limit
+                # State 3   (entry_adjusted=True)  → OPEN langsung (market order simulation)
+                is_market = risk_result.entry_adjusted
+                status = 'OPEN' if is_market else 'PENDING_ENTRY'
+
                 trade = PaperTrade(
                     pair=symbol,
                     side=reversal_result.signal,
@@ -162,7 +167,7 @@ class ExecutionAgent(BaseAgent):
                     tp_price=risk_result.tp_price,
                     size=risk_result.position_size,
                     leverage=risk_result.leverage,
-                    status='OPEN',
+                    status=status,
                     entry_timestamp=datetime.now(timezone.utc),
                     execution_mode=get_current_mode(),
                 )
@@ -170,16 +175,17 @@ class ExecutionAgent(BaseAgent):
                 db.flush()
                 trade_id = trade.id
 
+            action_label = "OPENED" if is_market else "PENDING"
             self._log(
-                f"PAPER TRADE OPENED | ID: {trade_id} | "
+                f"PAPER TRADE {action_label} | ID: {trade_id} | "
                 f"{symbol} {reversal_result.signal} | "
                 f"Entry: {risk_result.entry_price:.2f} | "
                 f"SL: {risk_result.sl_price:.2f} | TP: {risk_result.tp_price:.2f}"
             )
 
             return ExecutionResult(
-                action="OPEN",
-                reason=f"Trade opened in PAPER mode",
+                action='OPEN' if is_market else 'PENDING',
+                reason=f"Trade {'opened' if is_market else 'pending'} in PAPER mode",
                 trade_id=trade_id
             )
 

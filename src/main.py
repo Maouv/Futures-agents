@@ -19,13 +19,13 @@ from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.confirmation_agent import ConfirmationAgent
 from src.agents.math.risk_agent import RiskAgent, OverlapSkipError
 from src.agents.math.execution_agent import ExecutionAgent
-from src.agents.math.sltp_manager import check_paper_trades
+from src.agents.math.sltp_manager import check_paper_trades, check_paper_pending
 from src.agents.math.position_manager import check_trailing_stop
 from src.agents.llm.analyst_agent import run_analyst
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
 from src.utils.kill_switch import check_kill_switch
-from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.mode import init_mode, get_current_mode, get_mode_label
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 
@@ -155,7 +155,7 @@ class TradingBot:
                             )
                         elif result.action == 'PENDING':
                             self.send_notification_sync(
-                                f"LIVE {decision.action} PENDING | {symbol}\n"
+                                f"{get_mode_label()} {decision.action} PENDING | {symbol}\n"
                                 f"Limit @ ${risk.entry_price:,.2f}\n"
                                 f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                                 f"Waiting for fill..."
@@ -165,11 +165,15 @@ class TradingBot:
                 else:
                     logger.info(f"{symbol}: SKIP — {decision.reasoning}")
 
-            # ── 6. SLTP Check (semua pair sekaligus) ────────────────────────
+            # ── 6. Paper Pending Fill Check ─────────────────────────────────
+            if current_prices:
+                self._run_paper_pending_check(current_prices)
+
+            # ── 7. SLTP Check (semua pair sekaligus) ────────────────────────
             if current_prices:
                 self._run_sltp_check(current_prices)
 
-            # ── 7. Trailing Stop Check (live mode only) ────────────────────
+            # ── 8. Trailing Stop Check (live mode only) ────────────────────
             if current_prices:
                 self._run_trailing_stop_check(current_prices)
 
@@ -187,6 +191,23 @@ class TradingBot:
                 f"{trade['pair']} {trade['side']}\n"
                 f"PnL: ${trade['pnl']:.2f}"
             )
+
+    def _run_paper_pending_check(self, current_prices: dict):
+        """Cek PENDING_ENTRY paper trades untuk fill/expiry (paper mode only)."""
+        results = check_paper_pending(current_prices)
+
+        for r in results:
+            if r['action'] == 'filled':
+                self.send_notification_sync(
+                    f"📄 PAPER Order FILLED\n"
+                    f"{r['pair']} {r['side']}\n"
+                    f"Entry: ${r['entry_price']:,.2f}"
+                )
+            elif r['action'] == 'expired':
+                self.send_notification_sync(
+                    f"📄 PAPER Order EXPIRED\n"
+                    f"{r['pair']} {r['side']}"
+                )
 
     def _run_trailing_stop_check(self, current_prices: dict):
         """Cek trailing stop untuk live trades (hanya live/testnet mode)."""

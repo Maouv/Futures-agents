@@ -90,46 +90,50 @@ class RiskAgent(BaseAgent):
         ob_high = order_block.high
         ob_low = order_block.low
 
-        # ── OB Midpoint Overlap Check ────────────────────────────────────
-        entry_price = ob_midpoint
+        # ── 4-State OB Entry Logic ──────────────────────────────────────
+        # State 1: Belum masuk OB → limit di OB edge
+        # State 2: Dalam OB, sebelum midpoint → limit di current_price
+        # State 3: Lewat midpoint, masih dalam OB → market di current_price
+        # State 4: Keluar OB (invalidated) → OverlapSkipError
+        entry_price = ob_midpoint  # default (tidak pernah dipakai langsung)
         entry_adjusted = False
 
         if current_price is not None:
             if signal == "LONG":
-                # LONG: ideal entry di midpoint, harga harus di atas OB low
-                # Jika harga sudah di bawah OB low → di luar OB zone, SKIP
                 if current_price < ob_low:
+                    # State 4: price tembus bawah OB — invalidated
                     raise OverlapSkipError(
-                        f"LONG: harga {current_price:.2f} sudah di bawah OB low {ob_low:.2f} — edge hilang"
+                        f"LONG: price {current_price:.2f} di bawah OB low {ob_low:.2f} — OB invalidated"
                     )
-                # Jika harga sudah melewati midpoint (turun menuju OB tapi sudah rebound melewati mid)
-                # ATAU harga di antara OB low dan midpoint → masih OK, adjust
-                if current_price != ob_midpoint:
-                    # Cek apakah harga sudah melewati midpoint ke arah yang不利
-                    # LONG: harga sudah naik melewati midpoint → adjust
-                    if current_price > ob_midpoint:
-                        entry_price = current_price
-                        entry_adjusted = True
-                        self._log(
-                            f"OB OVERLAP: LONG entry adjusted dari midpoint {ob_midpoint:.2f} "
-                            f"ke current_price {current_price:.2f}"
-                        )
-
-            elif signal == "SHORT":
-                # SHORT: ideal entry di midpoint, harga harus di bawah OB high
-                # Jika harga sudah di atas OB high → di luar OB zone, SKIP
-                if current_price > ob_high:
-                    raise OverlapSkipError(
-                        f"SHORT: harga {current_price:.2f} sudah di atas OB high {ob_high:.2f} — edge hilang"
-                    )
-                # SHORT: harga sudah turun melewati midpoint → adjust
-                if current_price < ob_midpoint:
+                elif current_price >= ob_midpoint:
+                    # State 1 (price > ob_high) atau State 2 (ob_midpoint <= price <= ob_high)
+                    # Limit di ob_high — first touch point saat retrace
+                    entry_price = ob_high
+                    entry_adjusted = False
+                    self._log(f"OB State 1/2 LONG: limit di ob.high {ob_high:.2f}")
+                else:
+                    # State 3: ob_low < price < ob_midpoint — sudah lewat midpoint, masih dalam OB
                     entry_price = current_price
                     entry_adjusted = True
-                    self._log(
-                        f"OB OVERLAP: SHORT entry adjusted dari midpoint {ob_midpoint:.2f} "
-                        f"ke current_price {current_price:.2f}"
+                    self._log(f"OB State 3 LONG: market di current_price {current_price:.2f}")
+
+            elif signal == "SHORT":
+                if current_price > ob_high:
+                    # State 4: price tembus atas OB — invalidated
+                    raise OverlapSkipError(
+                        f"SHORT: price {current_price:.2f} di atas OB high {ob_high:.2f} — OB invalidated"
                     )
+                elif current_price <= ob_midpoint:
+                    # State 1 (price < ob_low) atau State 2 (ob_low <= price <= ob_midpoint)
+                    # Limit di ob_low — first touch point saat retrace naik
+                    entry_price = ob_low
+                    entry_adjusted = False
+                    self._log(f"OB State 1/2 SHORT: limit di ob.low {ob_low:.2f}")
+                else:
+                    # State 3: ob_midpoint < price < ob_high — sudah lewat midpoint, masih dalam OB
+                    entry_price = current_price
+                    entry_adjusted = True
+                    self._log(f"OB State 3 SHORT: market di current_price {current_price:.2f}")
 
         # Calculate SL based on signal direction
         # SL selalu dihitung dari OB boundary (bukan entry) untuk menjaga consistency

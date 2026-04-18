@@ -6,6 +6,7 @@ import pandas as pd
 from pydantic import BaseModel
 
 from src.agents.math.base_agent import BaseAgent
+from src.indicators.helpers import calculate_atr
 from src.indicators.luxalgo_smc import detect_all, OrderBlock, FairValueGap, BOSCHOCHSignal, SMCResult
 
 
@@ -60,26 +61,38 @@ class ReversalAgent(BaseAgent):
         candle_high = df_h1["high"].iloc[-1]
         candle_low = df_h1["low"].iloc[-1]
 
-        # Cari OB aktif terdekat
+        # Cari OB aktif terdekat berdasarkan proximity (2x ATR)
+        atr = calculate_atr(df_h1).iloc[-1]
+        max_distance = atr * 2  # FLAG 4: gunakan 2x, bukan 3x
+
         nearest_bull_ob = None  # OB bullish aktif terdekat di BAWAH harga
         nearest_bear_ob = None  # OB bearish aktif terdekat di ATAS harga
 
         for ob in result.order_blocks:
-            if not ob.mitigated:  # Hanya OB yang belum mitigated
-                if ob.bias == 1 and candle_low <= ob.high and candle_high >= ob.low:
-                    # Bullish OB di bawah harga
-                    if nearest_bull_ob is None or ob.high > nearest_bull_ob.high:
-                        nearest_bull_ob = ob
-                elif ob.bias == -1 and candle_low <= ob.high and candle_high >= ob.low:
-                    # Bearish OB di atas harga
-                    if nearest_bear_ob is None or ob.low < nearest_bear_ob.low:
-                        nearest_bear_ob = ob
+            if ob.mitigated:
+                continue
 
-        # Cek BOS/CHOCH terbaru dalam 20 candle terakhir (relaxed dari 5)
+            if ob.bias == 1:  # Bullish OB: harus di bawah current_price
+                if current_price > ob.low:  # OB ada di bawah (atau price baru masuk)
+                    distance = max(0, current_price - ob.high)  # 0 jika sudah dalam OB
+                    if distance <= max_distance:
+                        if nearest_bull_ob is None or ob.high > nearest_bull_ob.high:
+                            nearest_bull_ob = ob
+                            self._log(f"Bull OB candidate: {ob.low:.2f}-{ob.high:.2f} | distance: {distance:.4f} | ATR: {atr:.4f}")
+
+            elif ob.bias == -1:  # Bearish OB: harus di atas current_price
+                if current_price < ob.high:  # OB ada di atas (atau price baru masuk)
+                    distance = max(0, ob.low - current_price)  # 0 jika sudah dalam OB
+                    if distance <= max_distance:
+                        if nearest_bear_ob is None or ob.low < nearest_bear_ob.low:
+                            nearest_bear_ob = ob
+                            self._log(f"Bear OB candidate: {ob.low:.2f}-{ob.high:.2f} | distance: {distance:.4f} | ATR: {atr:.4f}")
+
+        # Cek BOS/CHOCH terbaru dalam 35 candle terakhir menggunakan confirmation candle (broken_index)
         recent_signal = None
         if result.bos_choch_signals:
             last = result.bos_choch_signals[-1]
-            if last.index >= len(df_h1) - 20:  # Changed from 5 to 20
+            if last.broken_index >= len(df_h1) - 35:
                 recent_signal = last
 
         # Tentukan sinyal

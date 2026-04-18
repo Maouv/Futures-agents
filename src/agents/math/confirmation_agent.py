@@ -64,12 +64,12 @@ class ConfirmationAgent(BaseAgent):
                 bos_alignment=False
             )
 
-        # Cek BOS/CHOCH alignment
+        # Cek BOS/CHOCH alignment menggunakan confirmation candle (broken_index)
         bos_alignment = False
         if result.bos_choch_signals:
-            # Ambil signal terakhir dalam 10 candle terakhir
+            # Ambil signal terakhir dalam 20 candle terakhir (window diperlebar dari 10 ke 20)
             for sig in reversed(result.bos_choch_signals):
-                if sig.index >= len(df_15m) - 10:
+                if sig.broken_index >= len(df_15m) - 20:
                     # Cek apakah searah dengan signal H1
                     expected_bias = 1 if h1_signal == "LONG" else -1
                     if sig.bias == expected_bias:

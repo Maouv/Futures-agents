@@ -42,6 +42,7 @@ class FairValueGap(BaseModel):
 
 class BOSCHOCHSignal(BaseModel):
     index: int
+    broken_index: int       # Index candle konfirmasi (confirmation candle)
     type: str               # 'BOS' atau 'CHOCH'
     bias: int               # 1=BULLISH, -1=BEARISH
     level: float
@@ -161,10 +162,15 @@ def detect_bos_choch(
         choch_val = row["CHOCH"]
         level_val = row["Level"]
 
+        # Guard FLAG 1: BrokenIndex adalah float64, cek NaN sebelum convert ke int
+        broken_raw = row["BrokenIndex"]
+        safe_broken_index = int(broken_raw) if (not np.isnan(broken_raw) and broken_raw > 0) else idx
+
         # Check if BOS signal
         if not np.isnan(bos_val) and bos_val != 0:
             result.append(BOSCHOCHSignal(
                 index=idx,
+                broken_index=safe_broken_index,
                 type="BOS",
                 bias=int(bos_val),
                 level=float(level_val)
@@ -173,6 +179,7 @@ def detect_bos_choch(
         elif not np.isnan(choch_val) and choch_val != 0:
             result.append(BOSCHOCHSignal(
                 index=idx,
+                broken_index=safe_broken_index,
                 type="CHOCH",
                 bias=int(choch_val),
                 level=float(level_val)
