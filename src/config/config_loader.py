@@ -174,36 +174,85 @@ DEFAULT_SECRETS = {
 }
 
 
+def _coerce_value(value, target_type):
+    """Coerce a single config value to the expected type.
+
+    Handles common JSON issues where numbers are stored as strings.
+    Returns the original value if coercion fails (with a warning).
+    """
+    if isinstance(value, target_type):
+        return value
+    try:
+        if target_type == bool:
+            if isinstance(value, str):
+                return value.lower() in ('true', '1', 'yes')
+            return bool(value)
+        return target_type(value)
+    except (ValueError, TypeError):
+        logger.warning(
+            f"config.json: cannot coerce {value!r} to {target_type.__name__}, keeping original"
+        )
+        return value
+
+
+def _coerce_config(config: dict, schema: dict) -> dict:
+    """
+    Coerce config dict values to match the types defined in a schema dict.
+
+    Recursively handles nested dicts. For scalar values, coerces to the type
+    of the corresponding schema value. Keys not present in schema are passed
+    through unchanged.
+
+    This ensures that JSON config values like "100" (string) are properly
+    converted to their expected types (int, float, bool) before consumption
+    by downstream code.
+    """
+    result = dict(config)
+    for key, default in schema.items():
+        if key not in result:
+            result[key] = default
+            continue
+        if isinstance(default, dict) and isinstance(result[key], dict):
+            result[key] = _coerce_config(result[key], default)
+        elif not isinstance(default, dict):
+            result[key] = _coerce_value(result[key], type(default))
+    return result
+
+
 def load_system_config() -> Dict:
-    """Load system section from config.json. Fallback to DEFAULT_SYSTEM."""
+    """Load system section from config.json with type coercion. Fallback to DEFAULT_SYSTEM."""
     data = _load_config()
     system = data.get("system", {})
-    return {**DEFAULT_SYSTEM, **system}
+    merged = {**DEFAULT_SYSTEM, **system}
+    return _coerce_config(merged, DEFAULT_SYSTEM)
 
 
 def load_trading_config() -> Dict:
-    """Load trading section from config.json. Fallback to DEFAULT_TRADING."""
+    """Load trading section from config.json with type coercion. Fallback to DEFAULT_TRADING."""
     data = _load_config()
     trading = data.get("trading", {})
-    return {**DEFAULT_TRADING, **trading}
+    merged = {**DEFAULT_TRADING, **trading}
+    return _coerce_config(merged, DEFAULT_TRADING)
 
 
 def load_trailing_stop_config() -> Dict:
-    """Load trailing_stop sub-section from config.json trading section."""
+    """Load trailing_stop sub-section from config.json with type coercion."""
     trading = load_trading_config()
     default_ts = DEFAULT_TRADING["trailing_stop"]
     user_ts = trading.get("trailing_stop", {})
-    return {**default_ts, **user_ts}
+    merged = {**default_ts, **user_ts}
+    return _coerce_config(merged, default_ts)
 
 
 def load_llm_config() -> Dict:
-    """Load llm section from config.json. Fallback to DEFAULT_LLM."""
+    """Load llm section from config.json with type coercion. Fallback to DEFAULT_LLM."""
     data = _load_config()
     llm = data.get("llm", {})
     result = {}
     for provider, defaults in DEFAULT_LLM.items():
         provider_config = llm.get(provider, {})
-        result[provider] = {**defaults, **provider_config}
+        merged = {**defaults, **provider_config}
+        result[provider] = _coerce_config(merged, defaults)
     return result
 
 

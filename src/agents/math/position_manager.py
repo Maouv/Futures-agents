@@ -59,6 +59,23 @@ def check_trailing_stop(current_prices: Dict[str, Dict]) -> List[Dict]:
     if not steps:
         return []
 
+    # Validate step schema — skip malformed entries instead of crashing
+    _required_keys = {'profit_pct', 'new_sl_pct'}
+    valid_steps = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            logger.warning(f"Trailing stop: step[{idx}] is not a dict, skipping — {step!r}")
+            continue
+        missing = _required_keys - step.keys()
+        if missing:
+            logger.warning(f"Trailing stop: step[{idx}] missing keys {missing}, skipping — {step!r}")
+            continue
+        valid_steps.append((idx, step))
+
+    if not valid_steps:
+        logger.warning("Trailing stop: no valid steps after validation, aborting check")
+        return []
+
     updated = []
 
     with get_session() as db:
@@ -94,7 +111,7 @@ def check_trailing_stop(current_prices: Dict[str, Dict]) -> List[Dict]:
             # Cari step tertinggi yang tercapai DAN step_index > trade.trailing_step
             matched_step = None
             matched_index = None
-            for i, step in enumerate(steps):
+            for i, step in valid_steps:
                 if i <= trade.trailing_step:
                     continue  # Sudah di-apply sebelumnya
                 if profit_pct >= step['profit_pct']:

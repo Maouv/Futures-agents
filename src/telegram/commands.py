@@ -8,6 +8,7 @@ DESAIN: Tidak ada manual close (/close, /closeall). Trade hanya ditutup oleh
 SL/TP (Binance server-side di live mode, SLTPManager di paper mode).
 Alasan: "Kalo dah masuk trade, bodo amat mau kena SL atau TP" — biar SL/TP natural.
 """
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from src.config.settings import settings
@@ -18,16 +19,40 @@ from src.utils.mode import get_current_mode, get_mode_label
 from src.utils.trade_utils import close_trade
 
 
-def _cleanup_mode_trades(mode: str) -> int:
+# ── Cleanup Result ──────────────────────────────────────────────────────────
+
+@dataclass
+class CleanupResult:
+    """Result dari mode cleanup — tracks closed trades and cancel errors."""
+    closed_count: int = 0
+    cancel_errors: list[str] = field(default_factory=list)
+    blocked: bool = False
+
+
+def _cleanup_warning(result: 'CleanupResult') -> str:
+    """Build warning string jika ada cancel errors (untuk Telegram message)."""
+    if not result.cancel_errors:
+        return ""
+    errors_preview = "\n".join(f"  • {e}" for e in result.cancel_errors[:5])
+    extra = f"\n  ... dan {len(result.cancel_errors) - 5} lainnya" if len(result.cancel_errors) > 5 else ""
+    return (
+        f"\n\n⚠️ {len(result.cancel_errors)} cancel error(s) — "
+        f"orphaned orders mungkin masih aktif di exchange:\n"
+        f"{errors_preview}{extra}\n"
+        f"Cek manual di Binance dashboard!"
+    )
+
+
+def _cleanup_mode_trades(mode: str) -> CleanupResult:
     """
     Tutup semua open/pending trades untuk mode tertentu.
     - Paper: cuma update DB (tidak ada order di exchange)
     - Testnet: cancel orders + close position di Binance testnet (uang palsu)
     - Mainnet: TIDAK diizinkan — harus manual close
 
-    Returns jumlah trades yang ditutup.
+    Returns CleanupResult dengan closed_count, cancel_errors, dan blocked flag.
     """
-    closed_count = 0
+    result = CleanupResult()
 
     with get_session() as db:
         trades = db.query(PaperTrade).filter(
@@ -36,11 +61,12 @@ def _cleanup_mode_trades(mode: str) -> int:
         ).all()
 
         if not trades:
-            return 0
+            return result
 
         if mode == 'mainnet':
             # JANGAN auto-close mainnet — uang asli
-            return -1  # Signal bahwa ada trades tapi tidak bisa auto-close
+            result.blocked = True
+            return result
 
         for trade in trades:
             if mode == 'testnet':
@@ -54,19 +80,27 @@ def _cleanup_mode_trades(mode: str) -> int:
                     if trade.sl_order_id:
                         try:
                             cancel_algo_order(trade.sl_order_id, trade.pair)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            err = f"SL cancel failed: trade {trade.id}, order {trade.sl_order_id}, {trade.pair}: {e}"
+                            logger.error(err)
+                            result.cancel_errors.append(err)
+
                     if trade.tp_order_id:
                         try:
                             cancel_algo_order(trade.tp_order_id, trade.pair)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            err = f"TP cancel failed: trade {trade.id}, order {trade.tp_order_id}, {trade.pair}: {e}"
+                            logger.error(err)
+                            result.cancel_errors.append(err)
+
                     # Entry order is a regular limit order — use standard cancel
                     if trade.status == 'PENDING_ENTRY' and trade.exchange_order_id:
                         try:
                             exchange.cancel_order(trade.exchange_order_id, trade.pair)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            err = f"Entry cancel failed: trade {trade.id}, order {trade.exchange_order_id}, {trade.pair}: {e}"
+                            logger.error(err)
+                            result.cancel_errors.append(err)
 
                     # Close position jika OPEN (ada posisi aktif)
                     if trade.status == 'OPEN':
@@ -80,16 +114,20 @@ def _cleanup_mode_trades(mode: str) -> int:
                                 params={'reduceOnly': True}
                             )
                         except Exception as e:
-                            logger.warning(f"Failed to close position for trade {trade.id}: {e}")
+                            err = f"Position close failed: trade {trade.id}, {trade.pair}: {e}"
+                            logger.error(err)
+                            result.cancel_errors.append(err)
 
                 except Exception as e:
-                    logger.error(f"Error during testnet cleanup for trade {trade.id}: {e}")
+                    err = f"Testnet cleanup error for trade {trade.id}: {e}"
+                    logger.error(err)
+                    result.cancel_errors.append(err)
 
             # Update DB — baik paper maupun testnet
             close_trade(trade, 'MODE_SWITCH')
-            closed_count += 1
+            result.closed_count += 1
 
-    return closed_count
+    return result
 
 
 def _get_mode_stats(mode: str) -> dict:
@@ -272,46 +310,46 @@ def cmd_switch_mode(mode: str = "") -> str:
     if mode == "paper":
         if current_mode == "mainnet":
             # Cek apakah ada open mainnet trades
-            closed = _cleanup_mode_trades("mainnet")
-            if closed == -1:
+            result = _cleanup_mode_trades("mainnet")
+            if result.blocked:
                 return (
                     "DITOLAK: Masih ada open trades di MAINNET. "
                     "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
                 )
 
-        closed = _cleanup_mode_trades(current_mode) if current_mode != "paper" else 0
+        result = _cleanup_mode_trades(current_mode) if current_mode != "paper" else CleanupResult()
         settings.EXECUTION_MODE = "paper"
         settings.USE_TESTNET = False
         reset_exchange()
         msg = "Mode: PAPER (simulasi lokal). Restart kembali ke .env."
-        if closed > 0:
-            msg = f"Mode: PAPER. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
-        return msg
+        if result.closed_count > 0:
+            msg = f"Mode: PAPER. {result.closed_count} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg + _cleanup_warning(result)
 
     elif mode == "testnet":
         if current_mode == "mainnet":
-            closed = _cleanup_mode_trades("mainnet")
-            if closed == -1:
+            result = _cleanup_mode_trades("mainnet")
+            if result.blocked:
                 return (
                     "DITOLAK: Masih ada open trades di MAINNET. "
                     "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
                 )
 
-        closed = _cleanup_mode_trades(current_mode) if current_mode not in ("testnet", "paper") else 0
+        result = _cleanup_mode_trades(current_mode) if current_mode not in ("testnet", "paper") else CleanupResult()
         settings.EXECUTION_MODE = "live"
         settings.USE_TESTNET = True
         reset_exchange()
         msg = "Mode: TESTNET (Binance Futures Testnet). Restart kembali ke .env."
-        if closed > 0:
-            msg = f"Mode: TESTNET. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
-        return msg
+        if result.closed_count > 0:
+            msg = f"Mode: TESTNET. {result.closed_count} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg + _cleanup_warning(result)
 
     elif mode == "mainnet":
         if not settings.CONFIRM_MAINNET:
             return "DITOLAK: CONFIRM_MAINNET=False. Set CONFIRM_MAINNET=True di .env dulu."
 
-        closed = _cleanup_mode_trades(current_mode) if current_mode != "mainnet" else 0
-        if closed == -1:
+        result = _cleanup_mode_trades(current_mode) if current_mode != "mainnet" else CleanupResult()
+        if result.blocked:
             return (
                 "DITOLAK: Masih ada open trades di MAINNET. "
                 "Tutup manual via Binance dulu — posisi uang asli tidak bisa di-auto-close."
@@ -321,9 +359,9 @@ def cmd_switch_mode(mode: str = "") -> str:
         settings.USE_TESTNET = False
         reset_exchange()
         msg = "Mode: MAINNET (Binance Futures Production — UANG ASLI). Restart kembali ke .env."
-        if closed > 0:
-            msg = f"Mode: MAINNET. {closed} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
-        return msg
+        if result.closed_count > 0:
+            msg = f"Mode: MAINNET. {result.closed_count} trade(s) di {current_mode.upper()} ditutup (MODE_SWITCH). Restart kembali ke .env."
+        return msg + _cleanup_warning(result)
 
     else:
         current = get_current_mode().upper()

@@ -26,7 +26,7 @@ from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
 from src.utils.kill_switch import check_kill_switch
 from src.utils.mode import get_current_mode, get_mode_label
-from src.utils.trade_utils import close_trade
+from src.utils.trade_utils import calculate_pnl, close_trade
 
 
 class TradingBot:
@@ -283,6 +283,42 @@ class TradingBot:
                 f"Close: ${trade.get('close_price', 0):,.2f} | PnL: ${trade.get('pnl', 0):.2f}"
             )
 
+    @staticmethod
+    def _pair_to_ccxt_symbol(pair: str) -> str:
+        """Convert 'BTCUSDT' to 'BTC/USDT:USDT' for ccxt."""
+        if pair.endswith('USDT'):
+            base = pair[:-4]
+            return f"{base}/USDT:USDT"
+        return pair
+
+    def _get_close_price_for_trade(self, trade, exchange) -> float | None:
+        """
+        Attempt to get actual close price for a reconciled trade.
+        Priority: SL/TP order fill price → current market price.
+        """
+        symbol = self._pair_to_ccxt_symbol(trade.pair)
+
+        # Try fetching SL/TP order to get actual fill price
+        for order_id_field in ('sl_order_id', 'tp_order_id'):
+            order_id = getattr(trade, order_id_field, None)
+            if order_id:
+                try:
+                    order = exchange.fetch_order(order_id, symbol)
+                    if order and order.get('status') == 'closed':
+                        fill_price = float(order.get('average', 0) or order.get('price', 0) or 0)
+                        if fill_price > 0:
+                            return fill_price
+                except Exception as e:
+                    logger.warning(f"Could not fetch {order_id_field}={order_id}: {e}")
+
+        # Fallback: current market price
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            return float(ticker['last'])
+        except Exception as e:
+            logger.warning(f"Could not fetch ticker for {symbol}: {e}")
+            return None
+
     def _reconcile_positions(self) -> None:
         """
         Reconcile DB state dengan Binance actual positions saat startup.
@@ -324,10 +360,19 @@ class TradingBot:
                 for trade in open_trades:
                     if trade.pair not in active_pairs:
                         # Trade open di DB tapi tidak di Binance — mark reconciled
-                        close_trade(trade, 'RECONCILED')
+                        close_price = self._get_close_price_for_trade(trade, exchange)
+                        pnl = (
+                            calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
+                            if close_price else None
+                        )
+                        close_trade(trade, 'RECONCILED', close_price=close_price, pnl=pnl)
+                        price_info = (
+                            f" | Close: ${close_price:,.2f} | PnL: ${pnl:.2f}"
+                            if close_price else " | Close price unavailable"
+                        )
                         logger.warning(
                             f"Reconciled: Trade {trade.id} ({trade.pair}) — "
-                            f"no position on Binance"
+                            f"no position on Binance{price_info}"
                         )
 
             logger.info(f"Position reconciliation complete. Binance positions: {active_pairs or 'none'}")

@@ -646,23 +646,34 @@ class ExecutionAgent(BaseAgent):
             result["action"] = "emergency_closed"
             return result
 
-        # ── Place TP (take_profit_market) via Algo API ─────────────────────
+        # ── Place TP (take_profit_market) via Algo API with retry ───────────
         tp_order_id = None
-        try:
-            tp_result = place_algo_order(
-                symbol=trade_pair,
-                side=close_side,
-                order_type='TAKE_PROFIT_MARKET',
-                trigger_price=trade_tp_price,
-                quantity=filled_amount,
-                reduce_only=True,
-            )
-            tp_order_id = str(tp_result.get('algoId', ''))
-            self._log(f"TP algo order placed | ID: {tp_order_id} | Trigger: {trade_tp_price:.2f}")
-        except Exception as e:
+        for attempt in range(1, SL_MAX_RETRIES + 1):
+            try:
+                tp_result = place_algo_order(
+                    symbol=trade_pair,
+                    side=close_side,
+                    order_type='TAKE_PROFIT_MARKET',
+                    trigger_price=trade_tp_price,
+                    quantity=filled_amount,
+                    reduce_only=True,
+                )
+                tp_order_id = str(tp_result.get('algoId', ''))
+                self._log(f"TP algo order placed | ID: {tp_order_id} | Trigger: {trade_tp_price:.2f}")
+                break
+            except Exception as e:
+                self._log_error(
+                    f"TP order attempt {attempt}/{SL_MAX_RETRIES} FAILED for trade {trade_id}: {e}"
+                )
+                if attempt < SL_MAX_RETRIES:
+                    backoff = SL_RETRY_BACKOFF_BASE ** attempt
+                    self._log(f"Retrying TP in {backoff}s...")
+                    time.sleep(backoff)
+
+        if tp_order_id is None:
             self._log_error(
-                f"ERROR: TP algo order FAILED for trade {trade_id}. "
-                f"SL still protects capital. Error: {e}"
+                f"WARNING: TP algo order FAILED after {SL_MAX_RETRIES} retries for trade {trade_id}. "
+                f"SL still protects capital but trade has no TP — consider manual intervention."
             )
 
         # ── Update DB ──────────────────────────────────────────────────────
