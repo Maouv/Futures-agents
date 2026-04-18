@@ -1,9 +1,10 @@
 # Bug Tracker — futures-agents
 
-Found: 2026-04-16 | Total: 7 bugs (2 Critical, 3 High, 2 Medium, 0 Low)
+Found: 2026-04-18 | Total: 8 bugs (3 Critical, 3 High, 2 Medium, 0 Low)
 
 | # | Severity | Status | Title | File |
 |---|----------|--------|-------|------|
+| 013 | CRITICAL | ACTIVE | Orphan Order: Exchange Order Tidak Tersimpan di DB | src/agents/math/execution_agent.py |
 | 006 | CRITICAL | ACTIVE | Missing close_price saat Reconciliation | src/main.py |
 | 007 | CRITICAL | ACTIVE | TP Algo Gagal, Trade Tanpa Proteksi | src/agents/math/execution_agent.py |
 | 008 | MEDIUM | ACTIVE | F-string SQL di Migration | src/data/storage.py |
