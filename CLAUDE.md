@@ -1,6 +1,6 @@
 # Futures Agents
 
-Multi-agent crypto futures trading bot running 24/7 on a VPS. Trades Binance USD-M Futures via ccxt. Pipeline: Math Agents (pure Python) → LLM Analyst (Cerebras) → optional RL filter (ONNX).
+Multi-agent crypto futures trading bot running 24/7 on a VPS. Trades Binance USD-M Futures via ccxt. Pipeline: Math Agents (pure Python) → LLM Analyst (provider chain) → optional RL filter (ONNX).
 
 **Language**: Use English for all communication and explanations. Indonesian only when explicitly requested.
 
@@ -27,7 +27,7 @@ src/agents/math/                 → Pure Python — NO LLM calls allowed here
   position_manager.py            → Trailing stop (live only) + liquidation price estimation
   sltp_manager.py                → Paper mode SL/TP check (high/low candle)
 src/agents/llm/
-  analyst_agent.py               → Cerebras Qwen-3, rule-based fallback if API down → AnalystDecision
+  analyst_agent.py               → Provider chain (config-driven) → rule-based fallback → AnalystDecision
   commander_agent.py             → Groq Llama-3.1 — Telegram command parser
   concierge_agent.py             → Groq Llama-3.1 — chat mode, concurrency locked
 src/indicators/
@@ -48,7 +48,7 @@ src/backtest/
 src/utils/
   exchange.py                     → Singleton ccxt factory + algo order helpers (place_algo_order, cancel_algo_order)
   rate_limiter.py                 → Sliding window 800 req/min (Binance)
-  llm_rate_limiter.py             → Semaphore + sliding window + min_interval rate limiter (Cerebras/Groq LLM)
+  llm_rate_limiter.py             → Semaphore + sliding window + min_interval rate limiter + dynamic provider registry
   kill_switch.py                  → Emergency stop
   logger.py                       → Loguru setup
 
@@ -73,7 +73,7 @@ ReversalResult:    signal: str (LONG/SHORT/NONE), confidence: int, ob, fvg, bos_
 ConfirmationResult: confirmed: bool, reason: str, fvg_confluence: bool, bos_alignment: bool
 RiskResult:        entry_price, sl_price, tp_price, position_size, risk_usd, reward_usd, rr_ratio, leverage, margin_required, entry_adjusted
 ExecutionResult:   action: str (OPEN/SKIP/PENDING), reason: str, trade_id: Optional[int]
-AnalystDecision:   action: str (LONG/SHORT/SKIP), confidence: int, reasoning: str, source: str (llm/rule_based)
+AnalystDecision:   action: str (LONG/SHORT/SKIP), confidence: int, reasoning: str, source: str (llm:<provider>/rule_based)
 ```
 
 ## Algo Order Flow (exchange.py)
@@ -96,7 +96,7 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 1. Every 15 minutes (APScheduler, cron `0,15,30,45`), for each pair in `config.json`:
 2. `fetch_ohlcv()` → H4, H1, 15m → gap check → session filter (London/NY only)
 3. `TrendAgent(H4)` + `ReversalAgent(H1)` + `ConfirmationAgent(15m)` → raw signals
-4. `AnalystAgent(LLM)` → LONG/SHORT/SKIP decision (rule-based fallback if API down)
+4. `AnalystAgent(LLM)` → iterates `llm.analyst_providers` chain → LONG/SHORT/SKIP (rule-based if all fail)
 5. [Optional] RL filter via ONNX inference
 6. `RiskAgent` → SL/TP/size → `ExecutionAgent` → paper INSERT or live order
 7. `sltp_manager` checks all open paper trades using high/low candle
@@ -111,7 +111,8 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 - **Exchange**: Always use `get_exchange()` from `src/utils/exchange.py`. Don't create `ccxt.binanceusdm()` directly
 - **Exit check**: Use candle **high/low**, not close (avoid look-ahead bias)
 - **SKIPPED trades**: Excluded from all metrics (win rate, profit factor, drawdown)
-- **LLM fallback**: Bot MUST NOT crash when LLM is down. `analyst_agent.py` always has rule-based fallback
+- **LLM provider chain**: `config.json → llm.analyst_providers` is an ordered list. Each provider has `name, api_key_env, base_url, model, rpm, min_interval, max_concurrent, retry_on_429, timeout_sec, max_tokens`. Add more providers by appending to the list. Source field = `llm:<provider_name>`
+- **LLM fallback**: Bot MUST NOT crash when LLM is down. `analyst_agent.py` iterates all providers → rule-based as last resort
 - **SL/TP live**: 2x Algo Order (`STOP_MARKET` + `TAKE_PROFIT_MARKET`). MUST use `place_algo_order()` from `exchange.py`
 - **Model**: Use `openai` SDK + `base_url`
 - **Position sizing**: Fixed USD (`RISK_PER_TRADE_USD`), not percentage of balance
@@ -125,7 +126,7 @@ WS TRIGGER: ORDER_TRADE_UPDATE.i = orderId NEW (not algoId)
 ## Non-Obvious Dependencies
 
 ```
-analyst_agent → llm_rate_limiter (cerebras_limiter)
+analyst_agent → llm_rate_limiter (get_provider_limiter)
 risk_agent → luxalgo_smc (OrderBlock)
 position_manager → exchange (cancel_algo_order, place_algo_order)
 ```
@@ -137,7 +138,8 @@ position_manager → exchange (cancel_algo_order, place_algo_order)
 3. Register agent in pipeline `src/main.py::TradingBot.run_trading_cycle()`
 4. If new indicator: create in `src/indicators/`, call from agent (not from LLM)
 5. Add pair: edit `config.json` in project root, restart bot
-6. Update this section if architecture changes
+6. Add LLM provider: append to `llm.analyst_providers` in `config.json`, add API key to `.env`, restart
+7. Update this section if architecture changes
 
 ## Gotcha / Known Issues
 
@@ -154,7 +156,8 @@ position_manager → exchange (cancel_algo_order, place_algo_order)
 - **Order status `closed`**: Binance can return `closed` besides `filled`. Both = executed
 - **Naive datetime in SQLite**: `PaperTrade.entry_timestamp` from DB has no timezone. Must `.replace(tzinfo=timezone.utc)` before subtracting `datetime.now(timezone.utc)`
 - **ccxt version**: Use `4.2.86`. Do NOT upgrade — newer versions block testnet for futures. Algo API called manually via `requests`
-- **Rate limiter**: Max 800 req/min (Binance). LLM rate limiting handled by `cerebras_limiter` in `llm_rate_limiter.py` (semaphore + RPM sliding window + min_interval to prevent burst 429s)
+- **Rate limiter**: Max 800 req/min (Binance). LLM rate limiting via `get_provider_limiter(name)` in `llm_rate_limiter.py` — dynamic per-provider from config (semaphore + RPM sliding window + min_interval)
+- **LLM client cache**: `analyst_agent.py` caches OpenAI clients per provider name (thread-safe). If API key changes in config, restart bot
 - **`onchain_fetcher.py`**: Placeholder, not implemented. Don't delete but don't use either
 - **RL training**: ONLY on Google Colab (GPU T4). Don't install torch/gymnasium/SB3 on VPS — will OOM
 - **Reconciliation symbol format**: `exchange.fetch_positions()` returns unified symbol `'BTC/USDT:USDT'`. Get raw symbol from `pos['info']['symbol']` (`'BTCUSDT'`), NOT from `pos['symbol']`
@@ -176,4 +179,3 @@ position_manager → exchange (cancel_algo_order, place_algo_order)
 - **CLAUDE.md max 300 lines** — if exceeding, compact by merging sections, removing verbose examples, or archiving stale content. Never remove critical gotchas or conventions
 - **Verify file existence** before referencing — if architecture tree is stale, update it
 
-<!-- RTK: See ~/.claude/RTK.md for RTK commands. Always prefix with `rtk`. -->

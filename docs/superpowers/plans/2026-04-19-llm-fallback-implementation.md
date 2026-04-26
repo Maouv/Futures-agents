@@ -1,40 +1,38 @@
-# LLM Fallback — Implementation Plan
+# LLM Provider Chain — Implementation Plan
 
-**Goal:** Primary (Cerebras) → Fallback → Rule-based for analyst_agent only.
+**Goal:** Config-driven provider chain for analyst_agent. `llm.analyst_providers` list → rule-based fallback.
 
-**Files:** `config.json`, `.env.example`, `settings.py`, `llm_rate_limiter.py`, `analyst_agent.py`, `tests/test_llm_fallback.py`
+**Status:** ✅ Implemented
 
 ---
 
-### Task 1: Config (`config.json`, `.env.example`)
+### Task 1: Config (`config.json`)
 
-- [ ] Add `llm.fallback` to config.json: `base_url`, `model`, `retry_on_429: 3`, `timeout_sec: 60`, `max_tokens: 2000`
-- [ ] Add `"fallback_api_key": "${FALLBACK_API_KEY}"` to `secrets`
-- [ ] Add `FALLBACK_API_KEY=` to `.env.example`
-- [ ] Commit
+- [x] Add `llm.analyst_providers` ordered list with per-provider config
+- [x] Add `"fallback_api_key": "${FALLBACK_API_KEY}"` to `secrets`
 
 ### Task 2: Settings (`settings.py`)
 
-- [ ] Add `FALLBACK_API_KEY` field + `model_post_init` block (same pattern as CEREBRAS_API_KEY)
-- [ ] Add properties: `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, `FALLBACK_RETRY_ON_429`, `FALLBACK_TIMEOUT_SEC`, `FALLBACK_MAX_TOKENS` (same pattern as cerebras properties)
-- [ ] Commit
+- [x] Add `FALLBACK_API_KEY` field + `model_post_init` resolution
+- [x] Add `ANALYST_PROVIDERS` property (reads from config)
+- [x] Add `get_secret_by_key()` helper for dynamic API key resolution
 
 ### Task 3: Rate Limiter (`llm_rate_limiter.py`)
 
-- [ ] Add `_get_fallback_limiter()` → `LLMRateLimiter(max_concurrent=1, rpm=60, min_interval=0.5)`
-- [ ] Add `fallback_limiter = _LazyLimiter(_get_fallback_limiter)` at module level
-- [ ] Commit
+- [x] Add `get_provider_limiter(name)` dynamic registry
+- [x] Reads RPM/min_interval/max_concurrent from provider config
 
-### Task 4: Analyst Agent (`analyst_agent.py`) — core change
+### Task 4: Analyst Agent (`analyst_agent.py`) — core rewrite
 
-- [ ] Add `from src.utils.llm_rate_limiter import fallback_limiter`
-- [ ] Add `_validate_fallback_config()` → returns bool, logs issues. Sets `FALLBACK_AVAILABLE` at module load.
-- [ ] Add `_call_fallback_llm(prompt)` → uses fallback_limiter, reads retry/timeout from config, same pattern as `_call_llm` but with config-driven retry loop
-- [ ] Replace `run_analyst` retry block: primary fails → check `FALLBACK_AVAILABLE` → `_call_fallback_llm()` → `_rule_based_fallback()`
-- [ ] Commit
+- [x] Provider chain iteration: tries each provider in order
+- [x] Cached OpenAI clients per provider (thread-safe)
+- [x] `_parse_llm_response()` — never raises, returns None on parse failure
+- [x] `_call_provider()` — retry with exponential backoff, rate limiter per provider
+- [x] `_is_retryable()` — handles 429, 5xx, timeout, connection errors
+- [x] Source tracing: `llm:<provider_name>` in AnalystDecision
 
-### Task 5: Tests (`tests/test_llm_fallback.py`)
+### Task 5: Docs & CLAUDE.md
 
-- [ ] 3 tests: fallback used when primary fails, rule-based when no fallback config, rule-based when both fail
-- [ ] Run: `pytest tests/test_llm_fallback.py -v`
-- [ ] Commit
+- [x] Updated spec doc
+- [x] Updated implementation plan
+- [x] Updated CLAUDE.md (architecture, conventions, gotchas)

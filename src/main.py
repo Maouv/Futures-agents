@@ -365,6 +365,12 @@ class TradingBot:
         """
         Reconcile DB state dengan Binance actual positions saat startup.
         Mencegah orphan positions setelah crash/restart.
+
+        OPEN trades    → dicek via fetch_positions() (posisi aktif yang sudah fill)
+        PENDING_ENTRY  → dicek via fetch_open_orders() (limit orders yang belum fill)
+        Keduanya HARUS dicek dengan cara berbeda — fetch_positions() tidak akan
+        pernah return limit order yang belum fill, sehingga PENDING_ENTRY yang valid
+        akan salah dikira orphan kalau dicek dengan cara yang sama.
         """
         from src.utils.exchange import get_exchange
 
@@ -372,27 +378,38 @@ class TradingBot:
         exchange = get_exchange()
 
         try:
-            # Fetch actual open positions from Binance
+            # ── 1. Fetch active positions (untuk cek OPEN trades) ──────────
             positions = exchange.fetch_positions()
             active_pairs = set()
             for pos in positions:
                 amt = float(pos.get('contracts', pos.get('positionAmt', 0)))
                 if abs(amt) > 0:
-                    # Use raw Binance symbol from 'info' dict — ccxt unified format
-                    # is 'BTC/USDT:USDT' which doesn't match our DB format 'BTCUSDT'
                     symbol = pos.get('info', {}).get('symbol', '')
                     if not symbol:
-                        # Fallback: parse unified format 'BTC/USDT:USDT' -> 'BTCUSDT'
                         unified = pos.get('symbol', '')
                         if '/' in unified:
-                            # 'BTC/USDT:USDT' -> 'BTC' + 'USDT' = 'BTCUSDT'
-                            base_quote = unified.split(':')[0]  # 'BTC/USDT'
+                            base_quote = unified.split(':')[0]
                             symbol = base_quote.replace('/', '')
                         else:
                             symbol = unified
                     active_pairs.add(symbol)
 
-            # Check DB trades vs Binance reality
+            # ── 2. Fetch open limit orders (untuk cek PENDING_ENTRY trades) ─
+            # exchange_order_id di DB adalah orderId biasa (bukan algoId)
+            # sehingga fetch_open_orders() bisa dipakai untuk verifikasi
+            open_orders = exchange.fetch_open_orders()
+            active_order_ids = set()
+            for o in open_orders:
+                oid = str(o.get('id', ''))
+                if oid:
+                    active_order_ids.add(oid)
+
+            logger.info(
+                f"Binance state: {len(active_pairs)} active positions, "
+                f"{len(active_order_ids)} open orders"
+            )
+
+            # ── 3. Reconcile DB trades ─────────────────────────────────────
             with get_session() as db:
                 open_trades = db.query(PaperTrade).filter(
                     PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
@@ -400,24 +417,68 @@ class TradingBot:
                 ).all()
 
                 for trade in open_trades:
-                    if trade.pair not in active_pairs:
-                        # Trade open di DB tapi tidak di Binance — mark reconciled
-                        close_price = self._get_close_price_for_trade(trade, exchange)
-                        pnl = (
-                            calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
-                            if close_price else None
-                        )
-                        close_trade(trade, 'RECONCILED', close_price=close_price, pnl=pnl)
-                        price_info = (
-                            f" | Close: ${close_price:,.2f} | PnL: ${pnl:.2f}"
-                            if close_price else " | Close price unavailable"
-                        )
-                        logger.warning(
-                            f"Reconciled: Trade {trade.id} ({trade.pair}) — "
-                            f"no position on Binance{price_info}"
-                        )
+                    if trade.status == 'OPEN':
+                        # OPEN = posisi aktif — cek via fetch_positions()
+                        if trade.pair not in active_pairs:
+                            close_price = self._get_close_price_for_trade(trade, exchange)
+                            pnl = (
+                                calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
+                                if close_price else None
+                            )
+                            close_trade(trade, 'RECONCILED', close_price=close_price, pnl=pnl)
+                            price_info = (
+                                f" | Close: ${close_price:,.2f} | PnL: ${pnl:.2f}"
+                                if close_price else " | Close price unavailable"
+                            )
+                            logger.warning(
+                                f"Reconciled OPEN: Trade {trade.id} ({trade.pair}) — "
+                                f"no position on Binance{price_info}"
+                            )
 
-            logger.info(f"Position reconciliation complete. Binance positions: {active_pairs or 'none'}")
+                    elif trade.status == 'PENDING_ENTRY':
+                        # PENDING_ENTRY = limit order belum fill — cek via fetch_open_orders()
+                        order_id = trade.exchange_order_id
+                        if not order_id:
+                            # Tidak ada order_id sama sekali — orphan pasti
+                            close_trade(trade, 'RECONCILED', close_price=None, pnl=None)
+                            logger.warning(
+                                f"Reconciled PENDING_ENTRY: Trade {trade.id} ({trade.pair}) — "
+                                f"no exchange_order_id in DB"
+                            )
+                        elif order_id not in active_order_ids:
+                            # Order sudah tidak ada di Binance (filled/cancelled/expired)
+                            # Cek apakah sudah fill dengan fetch_order langsung
+                            try:
+                                ccxt_symbol = self._pair_to_ccxt_symbol(trade.pair)
+                                order = exchange.fetch_order(order_id, ccxt_symbol)
+                                order_status = order.get('status', '')
+                                if order_status in ('filled', 'closed'):
+                                    # Order fill tapi DB belum update — akan dihandle
+                                    # di check_pending_orders() cycle berikutnya
+                                    logger.info(
+                                        f"PENDING_ENTRY Trade {trade.id} ({trade.pair}) — "
+                                        f"order {order_id} filled, will be handled next cycle"
+                                    )
+                                else:
+                                    # Order cancelled/expired di luar bot
+                                    close_trade(trade, 'RECONCILED', close_price=None, pnl=None)
+                                    logger.warning(
+                                        f"Reconciled PENDING_ENTRY: Trade {trade.id} ({trade.pair}) — "
+                                        f"order {order_id} status={order_status} on Binance"
+                                    )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Could not verify PENDING_ENTRY Trade {trade.id} "
+                                    f"order {order_id}: {e} — leaving as PENDING_ENTRY"
+                                )
+                        else:
+                            # Order masih ada di Binance — biarkan, sudah valid
+                            logger.info(
+                                f"PENDING_ENTRY Trade {trade.id} ({trade.pair}) — "
+                                f"order {order_id} still open on Binance, OK"
+                            )
+
+            logger.info(f"Position reconciliation complete.")
 
         except Exception as e:
             logger.error(f"Position reconciliation failed: {e}")

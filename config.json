@@ -14,7 +14,7 @@
   },
 
   "trading": {
-    "leverage": 1,
+    "leverage": 5,
     "margin_type": "isolated",
     "risk_per_trade_usd": 5.0,
     "risk_reward_ratio": 1.0,
@@ -34,7 +34,8 @@
   "secrets": {
     "cerebras_api_key": "${CEREBRAS_API_KEY}",
     "groq_api_key": "${GROQ_API_KEY}",
-    "concierge_api_key": "${CONCIERGE_API_KEY}"
+    "concierge_api_key": "${CONCIERGE_API_KEY}",
+    "fallback_api_key": "${FALLBACK_API_KEY}"
   },
 
   "llm": {
@@ -47,6 +48,32 @@
       "retry_on_429": 3,
       "timeout_sec": 45
     },
+    "analyst_providers": [
+      {
+        "name": "cerebras",
+        "api_key_env": "cerebras_api_key",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model": "qwen-3-235b-a22b-instruct-2507",
+        "rpm": 30,
+        "min_interval": 3.0,
+        "max_concurrent": 1,
+        "retry_on_429": 3,
+        "timeout_sec": 30,
+        "max_tokens": 200
+      },
+      {
+        "name": "fallback_openai",
+        "api_key_env": "fallback_api_key",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model": "qwen-3-235b-a22b-instruct-2507",
+        "rpm": 30,
+        "min_interval": 3.0,
+        "max_concurrent": 1,
+        "retry_on_429": 3,
+        "timeout_sec": 45,
+        "max_tokens": 200
+      }
+    ],
     "groq": {
       "base_url": "https://api.groq.com/openai/v1/chat/completions",
       "model": "llama-3.1-8b-instant",

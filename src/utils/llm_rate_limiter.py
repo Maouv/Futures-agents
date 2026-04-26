@@ -149,3 +149,35 @@ class _LazyLimiter:
 # Singleton proxies — import ini di agent files
 cerebras_limiter = _LazyLimiter(_get_cerebras_limiter)
 groq_limiter = _LazyLimiter(_get_groq_limiter)
+
+
+# ── Dynamic limiter registry for analyst provider chain ───────────────────
+
+_provider_limiters: dict[str, _LazyLimiter] = {}
+_registry_lock = threading.Lock()
+
+
+def get_provider_limiter(name: str) -> _LazyLimiter:
+    """
+    Get or create a rate limiter for an analyst provider.
+    Config is read fresh each time from config.json analyst_providers list.
+    """
+    if name not in _provider_limiters:
+        with _registry_lock:
+            if name not in _provider_limiters:
+                _provider_limiters[name] = _LazyLimiter(lambda n=name: _make_provider_limiter(n))
+    return _provider_limiters[name]
+
+
+def _make_provider_limiter(name: str) -> LLMRateLimiter:
+    """Create LLMRateLimiter from analyst_providers config."""
+    from src.config.settings import settings
+    for prov in settings.ANALYST_PROVIDERS:
+        if prov['name'] == name:
+            return LLMRateLimiter(
+                max_concurrent=prov.get('max_concurrent', 1),
+                rpm=prov.get('rpm', 30),
+                min_interval=prov.get('min_interval', 1.0),
+            )
+    # Default if not found
+    return LLMRateLimiter(max_concurrent=1, rpm=30, min_interval=1.0)

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     CEREBRAS_API_KEY: Optional[SecretStr] = Field(None, description="Cerebras API Key")
     GROQ_API_KEY: Optional[SecretStr] = Field(None, description="Groq API Key")
     CONCIERGE_API_KEY: Optional[SecretStr] = Field(None, description="Concierge API Key")
+    FALLBACK_API_KEY: Optional[SecretStr] = Field(None, description="Fallback LLM API Key")
 
     @field_validator('BINANCE_API_KEY', 'BINANCE_API_SECRET')
     @classmethod
@@ -93,6 +94,12 @@ class Settings(BaseSettings):
             val = secrets['concierge_api_key']
             if val:
                 object.__setattr__(self, 'CONCIERGE_API_KEY', SecretStr(val))
+
+        # FALLBACK_API_KEY
+        if self.FALLBACK_API_KEY is None:
+            val = secrets.get('fallback_api_key', '')
+            if val:
+                object.__setattr__(self, 'FALLBACK_API_KEY', SecretStr(val))
 
     # ── System Properties (from config.json) ────────────────────────────────
 
@@ -285,6 +292,25 @@ class Settings(BaseSettings):
     def LLM_FAST_TIMEOUT_SEC(self) -> int:
         from src.config.config_loader import load_llm_config
         return load_llm_config()['cerebras']['timeout_sec']
+
+    # ── Analyst Provider Chain (from config.json) ───────────────────────────
+
+    @property
+    def ANALYST_PROVIDERS(self) -> list:
+        """Ordered list of LLM providers for analyst_agent chain."""
+        from src.config.config_loader import load_llm_config
+        return load_llm_config().get('analyst_providers', [])
+
+    def get_secret_by_key(self, key: str) -> Optional[str]:
+        """Resolve a config.json api_key_env name to the actual secret value."""
+        mapping = {
+            'cerebras_api_key': self.CEREBRAS_API_KEY,
+            'groq_api_key': self.GROQ_API_KEY,
+            'concierge_api_key': self.CONCIERGE_API_KEY,
+            'fallback_api_key': self.FALLBACK_API_KEY,
+        }
+        secret = mapping.get(key)
+        return secret.get_secret_value() if secret else None
 
 
 # Singleton — import ini di mana saja
