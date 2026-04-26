@@ -252,6 +252,55 @@ def cancel_algo_order(
     return result
 
 
+def get_open_algo_orders(symbol: str) -> list:
+    """
+    Fetch semua open algo orders untuk symbol tertentu via Binance Algo API.
+    Digunakan untuk cancel counter-order (SL/TP) setelah trade closed.
+
+    Args:
+        symbol: Trading pair, e.g. 'BTCUSDT'
+
+    Returns:
+        List of dict, masing-masing berisi setidaknya 'algoId' dan 'type'
+    """
+    import time
+    import hashlib
+    import hmac
+    import urllib.parse
+
+    exchange = get_exchange()
+
+    params = {
+        'symbol': symbol,
+        'timestamp': int(time.time() * 1000),
+    }
+
+    query = urllib.parse.urlencode(params)
+    signature = hmac.new(
+        exchange.secret.encode(),
+        query.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    query += f'&signature={signature}'
+
+    if settings.USE_TESTNET:
+        base_url = str(settings.BINANCE_TESTNET_URL).rstrip('/')
+    else:
+        base_url = 'https://fapi.binance.com'
+
+    url = f'{base_url}/fapi/v1/openAlgoOrders?{query}'
+
+    import requests as http_requests
+    headers = {'X-MBX-APIKEY': exchange.apiKey}
+    response = http_requests.get(url, headers=headers, timeout=10)
+    result = response.json()
+
+    if response.status_code != 200:
+        raise ccxt.ExchangeError(f"get_open_algo_orders failed: {result}")
+
+    return result.get('orders', [])
+
+
 def get_ws_base_url() -> str:
     """
     Return WebSocket base URL berdasarkan settings.USE_TESTNET.

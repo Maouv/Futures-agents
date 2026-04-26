@@ -146,7 +146,7 @@ def migrate_db() -> None:
         ("paper_trades", "sl_order_id", "VARCHAR(50)"),
         ("paper_trades", "tp_order_id", "VARCHAR(50)"),
         ("paper_trades", "close_price", "FLOAT"),
-        ("paper_trades", "trailing_step", "INTEGER DEFAULT 0"),
+        ("paper_trades", "trailing_step", "INTEGER DEFAULT -1"),
         ("paper_trades", "liq_price", "FLOAT"),
     ]
 
@@ -171,6 +171,15 @@ def migrate_db() -> None:
                 )
                 conn.commit()
                 logger.info(f"Migration: Added column {table}.{column}")
+
+                # Fix data: trailing_step that got DEFAULT 0 must be reset to -1
+                if column == 'trailing_step':
+                    conn.execute(text(
+                        "UPDATE paper_trades SET trailing_step = -1 WHERE trailing_step = 0"
+                    ))
+                    conn.commit()
+                    logger.info("Migration: Fixed trailing_step default from 0 to -1")
+
             except Exception:
                 # Kolom sudah ada — aman untuk di-ignore
                 conn.rollback()

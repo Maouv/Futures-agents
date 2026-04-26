@@ -51,6 +51,24 @@ class ExecutionAgent(BaseAgent):
     LIVE MODE: LIMIT order di OB midpoint, lalu monitor hingga FILLED
     """
 
+    def __init__(self, notification_callback=None):
+        """
+        Args:
+            notification_callback: Optional callable untuk kirim Telegram alert.
+                                   Dipanggil dengan string message.
+        """
+        super().__init__()
+        self._notification_callback = notification_callback
+
+    def _send_alert(self, message: str) -> None:
+        """Kirim alert via callback kalau tersedia, selalu log juga."""
+        self._log_error(message)
+        if self._notification_callback:
+            try:
+                self._notification_callback(message)
+            except Exception as e:
+                logger.error(f"Failed to send alert notification: {e}")
+
     def run(
         self,
         symbol: str,
@@ -307,19 +325,6 @@ class ExecutionAgent(BaseAgent):
                 f"{symbol} {side.upper()} @ {price}"
             )
 
-            # ── Step 3: UPDATE ke PENDING_ENTRY dengan order_id ───────────
-            with get_session() as db:
-                db_trade = db.query(PaperTrade).get(trade_id)
-                if db_trade:
-                    db_trade.status = 'PENDING_ENTRY'
-                    db_trade.exchange_order_id = exchange_order_id
-
-            return ExecutionResult(
-                action="PENDING",
-                reason=f"Limit order placed, waiting for fill. Order ID: {exchange_order_id}",
-                trade_id=trade_id
-            )
-
         except (ccxt.InsufficientFunds, ccxt.InvalidOrder, ccxt.NetworkError, ccxt.ExchangeError, Exception) as e:
             # ── Step 4: UPDATE ke FAILED jika exchange gagal ───────────────
             self._log_error(f"Exchange error for trade {trade_id}: {e}")
@@ -331,6 +336,34 @@ class ExecutionAgent(BaseAgent):
                     db_trade.close_timestamp = datetime.now(timezone.utc)
 
             return self._handle_ccxt_error(e, "live limit execution")
+
+        # ── Step 3: UPDATE ke PENDING_ENTRY — TERPISAH dari Step 2 ────────
+        # Order sudah ada di exchange. Kalau step ini gagal, jangan
+        # mark FAILED — order-nya valid, hanya DB yang bermasalah.
+        try:
+            with get_session() as db:
+                db_trade = db.query(PaperTrade).get(trade_id)
+                if db_trade:
+                    db_trade.status = 'PENDING_ENTRY'
+                    db_trade.exchange_order_id = exchange_order_id
+
+        except Exception as db_err:
+            # KRITIS: order sudah ada di Binance tapi DB gagal update
+            # Log exchange_order_id agar bisa recovery manual
+            logger.critical(
+                f"CRITICAL DB WRITE FAILED | Trade {trade_id} | {symbol} | "
+                f"Order ALREADY ON BINANCE with ID: {exchange_order_id} | "
+                f"Error: {db_err} | "
+                f"→ Manual: update DB trade {trade_id} status=PENDING_ENTRY "
+                f"exchange_order_id={exchange_order_id}"
+            )
+            # Jangan raise — bot tidak perlu crash, order di exchange tetap valid
+
+        return ExecutionResult(
+            action="PENDING",
+            reason=f"Limit order placed, waiting for fill. Order ID: {exchange_order_id}",
+            trade_id=trade_id
+        )
 
     def _execute_live_market(
         self,
@@ -409,7 +442,12 @@ class ExecutionAgent(BaseAgent):
                 tp_order_id = str(tp_result.get('algoId', ''))
                 self._log(f"TP algo placed | ID: {tp_order_id} | Trigger: {risk_result.tp_price:.2f}")
             except Exception as e:
-                self._log_error(f"TP algo FAILED: {e}. SL still protects capital.")
+                self._send_alert(
+                    f"⚠️ TP GAGAL | Trade {trade_id} | {symbol}\n"
+                    f"SL @ {risk_result.sl_price:.4f} masih aktif.\n"
+                    f"Error: {e}\n"
+                    f"→ Manual TP perlu dipasang di Binance!"
+                )
 
             # ── Store OPEN di DB ───────────────────────────────────────────
             liq_price = calculate_liquidation_price(filled_price, reversal_result.signal, risk_result.leverage)
@@ -704,9 +742,10 @@ class ExecutionAgent(BaseAgent):
                     time.sleep(backoff)
 
         if tp_order_id is None:
-            self._log_error(
-                f"WARNING: TP algo order FAILED after {SL_MAX_RETRIES} retries for trade {trade_id}. "
-                f"SL still protects capital but trade has no TP — consider manual intervention."
+            self._send_alert(
+                f"⚠️ TP GAGAL setelah {SL_MAX_RETRIES} retry | Trade {trade_id} | {trade_pair}\n"
+                f"SL @ {trade_sl_price:.4f} masih aktif.\n"
+                f"→ Manual TP perlu dipasang di Binance!"
             )
 
         # ── Update DB ──────────────────────────────────────────────────────

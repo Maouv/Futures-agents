@@ -267,8 +267,18 @@ class UserDataStream:
                 close_reason = 'TP'
                 counter_order_id = trade.sl_order_id
             else:
-                # Entry order fill — tidak perlu close trade
-                logger.debug(f"Entry order fill detected for trade {trade.id}")
+                # Entry order fill — place SL/TP langsung tanpa tunggu 15 menit
+                trade_id_copy = trade.id
+                pair_copy = trade.pair
+                logger.info(
+                    f"Entry order fill detected via WS for trade {trade_id_copy} ({pair_copy}) "
+                    f"— triggering immediate SL/TP placement"
+                )
+                threading.Thread(
+                    target=self._handle_entry_fill_async,
+                    args=(trade_id_copy, pair_copy),
+                    daemon=True,
+                ).start()
                 return
 
             # ── Race condition guard ───────────────────────────────────────────
@@ -322,22 +332,78 @@ class UserDataStream:
                 logger.error(f"Notification callback error: {e}")
 
     def _cancel_counter_order(self, order_id: str, symbol: str, reason: str) -> None:
-        """Cancel order yang counterpart (SL hit → cancel TP, atau sebaliknya).
-        SL/TP are Algo Orders — must use cancel_algo_order() instead of exchange.cancel_order().
+        """
+        Cancel counter-order (SL hit → cancel TP, TP hit → cancel SL).
+        Strategi: fetch open algo orders by symbol, cancel yang tipe berlawanan.
+        Tidak bergantung pada kecocokan ID — lebih robust dari cancel by algoId.
         """
         try:
-            from src.utils.exchange import cancel_algo_order
-            cancel_algo_order(order_id, symbol)
-            logger.info(
-                f"Counter-order cancelled | ID: {order_id} | "
-                f"Reason: {reason} was hit"
-            )
-        except Exception as e:
-            # Order mungkin sudah ter-cancel atau ter-fill bersamaan
-            if 'Unknown order' in str(e) or 'Order does not exist' in str(e) or 'algoId' in str(e):
-                logger.debug(f"Counter-order {order_id} already gone")
-            else:
-                logger.error(
-                    f"CRITICAL: Failed to cancel counter-order {order_id}! "
-                    f"Manual intervention required. Error: {e}"
+            from src.utils.exchange import get_open_algo_orders, cancel_algo_order
+
+            # SL hit → cancel TAKE_PROFIT_MARKET yang tersisa
+            # TP hit → cancel STOP_MARKET yang tersisa
+            cancel_type = 'TAKE_PROFIT_MARKET' if reason == 'SL' else 'STOP_MARKET'
+
+            open_orders = get_open_algo_orders(symbol)
+
+            if not open_orders:
+                logger.debug(
+                    f"No open algo orders for {symbol} — counter-order already gone"
                 )
+                return
+
+            cancelled = False
+            for o in open_orders:
+                order_type = o.get('type', o.get('algoType', ''))
+                if order_type == cancel_type:
+                    algo_id = str(o.get('algoId', ''))
+                    if algo_id:
+                        cancel_algo_order(algo_id, symbol)
+                        logger.info(
+                            f"Counter-order cancelled | algoId: {algo_id} | "
+                            f"Type: {cancel_type} | Symbol: {symbol} | "
+                            f"Reason: {reason} was hit"
+                        )
+                        cancelled = True
+                        break
+
+            if not cancelled:
+                logger.debug(
+                    f"No {cancel_type} algo order found for {symbol} — already gone"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to cancel counter-order for {symbol}! "
+                f"Manual cancel required in Binance dashboard. Error: {e}"
+            )
+
+    def _handle_entry_fill_async(self, trade_id: int, pair: str) -> None:
+        """
+        Dipanggil dari background thread saat entry order fill terdeteksi via WS.
+        Trigger check_pending_orders() untuk place SL/TP tanpa tunggu 15 menit.
+        """
+        try:
+            from src.agents.math.execution_agent import ExecutionAgent
+            agent = ExecutionAgent()
+            results = agent.check_pending_orders()
+
+            for r in results:
+                if r.get('trade_id') == trade_id and r.get('action') == 'filled':
+                    logger.info(
+                        f"SL/TP placed immediately via WS fill handler | "
+                        f"Trade {trade_id} | {pair}"
+                    )
+                    if self._notification_callback:
+                        self._notification_callback({
+                            'event': 'trade_filled',
+                            'trade_id': trade_id,
+                            'pair': pair,
+                        })
+                    break
+
+        except Exception as e:
+            logger.error(
+                f"WS entry fill handler failed for trade {trade_id} ({pair}): {e} "
+                f"— SL/TP will be placed at next 15min cycle"
+            )
