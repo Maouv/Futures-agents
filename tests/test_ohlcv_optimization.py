@@ -4,7 +4,6 @@ Test bahwa bulk insert optimization bekerja dengan benar.
 """
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
 
 from src.data.ohlcv_fetcher import TIMEFRAME_MAP
 from src.data.storage import init_db, get_session

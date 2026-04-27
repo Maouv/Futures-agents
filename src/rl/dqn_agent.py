@@ -12,8 +12,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-from typing import Tuple, Optional
-from pathlib import Path
+from typing import Optional
 
 from src.rl.replay_buffer import ReplayBuffer
 

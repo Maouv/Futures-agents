@@ -7,7 +7,7 @@ Mengikuti OpenAI Gym interface untuk kompatibilitas dengan berbagai RL libraries
 
 import pandas as pd
 import numpy as np
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any
 from pathlib import Path
 
 

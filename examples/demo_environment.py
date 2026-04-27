@@ -24,20 +24,20 @@ def demo_basic_usage():
     csv_path = "data/rl_training/BTCUSDT_2024.csv"
     env = TradingEnvironment(csv_path, strategy_name='SMC')
 
-    print(f"\n📊 Environment Info:")
+    print("\n📊 Environment Info:")
     print(f"  - Strategy: {env.strategy_name}")
     print(f"  - Total Steps: {env.max_steps}")
     print(f"  - Observation Space: {env.observation_space}")
     print(f"  - Action Space: {env.action_space} (0=SKIP, 1=ENTRY)")
 
     # Reset environment
-    print(f"\n🔄 Resetting environment...")
+    print("\n🔄 Resetting environment...")
     state = env.reset()
     print(f"  - Initial State Shape: {state.shape}")
     print(f"  - State Range: [{state.min():.3f}, {state.max():.3f}]")
 
     # Run episode dengan random policy
-    print(f"\n🎯 Running Episode (Random Policy):")
+    print("\n🎯 Running Episode (Random Policy):")
     print("-" * 60)
 
     done = False
@@ -67,7 +67,7 @@ def demo_basic_usage():
 
     # Episode statistics
     stats = env.get_episode_stats()
-    print(f"\n📈 Episode Statistics:")
+    print("\n📈 Episode Statistics:")
     print(f"  - Total Steps: {stats['total_steps']}")
     print(f"  - Total Reward: {total_reward:.3f}")
     print(f"  - Win Rate: {stats['win_rate']:.2%}")
@@ -80,7 +80,7 @@ def demo_basic_usage():
     # Action distribution
     skip_count = actions_taken.count(0)
     entry_count = actions_taken.count(1)
-    print(f"\n🎯 Action Distribution:")
+    print("\n🎯 Action Distribution:")
     print(f"  - SKIP: {skip_count} ({skip_count/len(actions_taken):.1%})")
     print(f"  - ENTRY: {entry_count} ({entry_count/len(actions_taken):.1%})")
 

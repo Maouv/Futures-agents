@@ -109,14 +109,14 @@ def test_skipped_trades_excluded():
         ))
 
     print(f"\nTotal trades in list: {len(trades)}")
-    print(f"  - TP trades: 3")
-    print(f"  - SL trades: 2")
-    print(f"  - SKIPPED trades: 5")
+    print("  - TP trades: 3")
+    print("  - SL trades: 2")
+    print("  - SKIPPED trades: 5")
 
     # Calculate metrics
     metrics = calculate_metrics(trades, initial_balance=10000.0)
 
-    print(f"\nCalculated Metrics:")
+    print("\nCalculated Metrics:")
     print(f"  Total Trades:      {metrics.total_trades}")
     print(f"  Winning Trades:    {metrics.winning_trades}")
     print(f"  Losing Trades:     {metrics.losing_trades}")
@@ -128,7 +128,7 @@ def test_skipped_trades_excluded():
     print(f"  Avg Loss:          {metrics.avg_loss:.2f} USDT")
 
     # Verify results
-    print(f"\n" + "=" * 60)
+    print("\n" + "=" * 60)
     print("VERIFICATION")
     print("=" * 60)
 

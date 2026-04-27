@@ -2,7 +2,6 @@
 test_indicators.py — Unit tests untuk indikator SMC dan Mean Reversion.
 Semua test menggunakan data dummy yang sudah diketahui hasilnya.
 """
-import pytest
 import pandas as pd
 import numpy as np
 from src.indicators.helpers import crossover, crossunder, calculate_atr

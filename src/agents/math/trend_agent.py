@@ -1,7 +1,6 @@
 """
 trend_agent.py — Analisis trend H4 menggunakan BOS/CHOCH.
 """
-from typing import Optional
 import pandas as pd
 from pydantic import BaseModel
 

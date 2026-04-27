@@ -5,7 +5,6 @@ Fokus: Position size calculation (BUG #3 fix).
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
 
 from src.agents.math.risk_agent import RiskAgent
 from src.indicators.luxalgo_smc import OrderBlock

@@ -214,7 +214,7 @@ def debug_bos_choch(df: pd.DataFrame, signals: list):
     print(f"[BOS/CHOCH] BOS: {len(bos)} | CHOCH: {len(choch)}")
 
     recent = sorted(signals, key=lambda s: s.index, reverse=True)[:5]
-    print(f"\n[BOS/CHOCH] 5 sinyal terbaru:")
+    print("\n[BOS/CHOCH] 5 sinyal terbaru:")
     print(f"  {'IDX':>5}  {'TIME':>25}  {'TYPE':>6}  {'BIAS':>7}  {'LEVEL':>12}")
     print(f"  {'-'*65}")
     for s in recent:
@@ -244,12 +244,12 @@ def main():
     df_plain = df.reset_index(drop=True)
 
     # 2. Jalankan indikator dengan swing terpisah
-    print(f"\n[SMC] Running indicators...")
+    print("\n[SMC] Running indicators...")
     print(f"[SMC] OB swing_length={args.swing_ob} | BOS swing_length={args.swing_bos}")
     obs     = detect_order_blocks(df_plain, swing_length=args.swing_ob)
     fvgs    = detect_fvg(df_plain)
     signals = detect_bos_choch(df_plain, swing_length=args.swing_bos)
-    print(f"[SMC] ✅ Done")
+    print("[SMC] ✅ Done")
 
     # 3. Debug output
     debug_order_blocks(df, obs)

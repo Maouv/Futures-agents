@@ -38,7 +38,7 @@ def create_kill_switch() -> None:
     """
     os.makedirs(os.path.dirname(KILL_SWITCH_PATH), exist_ok=True)
     with open(KILL_SWITCH_PATH, "w") as f:
-        f.write(f"Kill switch activated.\n")
+        f.write("Kill switch activated.\n")
     logger.critical("KILL SWITCH ACTIVATED — no new trades will be opened.")
 
 

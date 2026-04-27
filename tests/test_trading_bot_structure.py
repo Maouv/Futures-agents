@@ -3,7 +3,6 @@ test_trading_bot_structure.py — Unit test untuk BUG #12 fix.
 Test bahwa TradingBot class structure bekerja dengan benar.
 """
 import asyncio
-from unittest.mock import Mock, patch
 
 from src.main import TradingBot
 
@@ -41,7 +40,7 @@ def test_send_notification_sync_handles_errors():
     try:
         bot.send_notification_sync("test")
         # Success - error ditangani dengan graceful
-    except Exception as e:
+    except Exception:
         # If raises, it should be handled in implementation
         pass
 

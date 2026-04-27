@@ -10,8 +10,6 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import argparse
-import pandas as pd
-from datetime import datetime
 
 from src.data.ohlcv_fetcher import fetch_and_store_ohlcv
 from src.indicators.luxalgo_smc import detect_order_blocks, detect_fvg, detect_bos_choch
@@ -52,7 +50,7 @@ def validate(symbol: str = "BTCUSDT", timeframe: str = "1h", bars: int = 100):
     try:
         mr_result = calculate_mean_reversion(df)
         logger.info(f"RSI(14): {mr_result.rsi:.2f} | Signal: {mr_result.rsi_signal}")
-        logger.info(f"Bollinger Bands(20, 2.0):")
+        logger.info("Bollinger Bands(20, 2.0):")
         logger.info(f"  Upper:  {mr_result.bb_upper:.2f}")
         logger.info(f"  Middle: {mr_result.bb_middle:.2f}")
         logger.info(f"  Lower:  {mr_result.bb_lower:.2f}")

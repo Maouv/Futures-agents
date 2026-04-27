@@ -4,7 +4,6 @@ Loop 15 menit via APScheduler (background thread).
 Telegram bot di main thread.
 """
 import asyncio
-import time
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -28,7 +27,7 @@ from src.agents.llm.analyst_agent import run_analyst
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.logger import logger, setup_logger
 from src.utils.kill_switch import check_kill_switch
-from src.utils.mode import init_mode, get_current_mode, get_mode_label
+from src.utils.mode import get_current_mode, get_mode_label
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 
@@ -483,7 +482,7 @@ class TradingBot:
                                 f"order {order_id} still open on Binance, OK"
                             )
 
-            logger.info(f"Position reconciliation complete.")
+            logger.info("Position reconciliation complete.")
 
         except Exception as e:
             logger.error(f"Position reconciliation failed: {e}")

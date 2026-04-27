@@ -16,9 +16,9 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.agents.math.trend_agent import TrendAgent, TrendResult
-from src.agents.math.reversal_agent import ReversalAgent, ReversalResult
-from src.agents.math.confirmation_agent import ConfirmationAgent, ConfirmationResult
+from src.agents.math.trend_agent import TrendAgent
+from src.agents.math.reversal_agent import ReversalAgent
+from src.agents.math.confirmation_agent import ConfirmationAgent
 from src.indicators.helpers import calculate_atr
 from src.config.settings import settings
 from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics

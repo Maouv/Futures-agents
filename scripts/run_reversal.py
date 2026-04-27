@@ -65,7 +65,7 @@ if result.bos_choch:
     print(f"  Type   : {result.bos_choch.type}")
     print(f"  Bias   : {'Bullish' if result.bos_choch.bias == 1 else 'Bearish'} ({result.bos_choch.bias})")
     print(f"  Index  : {result.bos_choch.index}")
-    print(f"  Price  : {result.bos_choch.price:.2f}" if hasattr(result.bos_choch, 'price') and result.bos_choch.price else f"  Price  : N/A")
+    print(f"  Price  : {result.bos_choch.price:.2f}" if hasattr(result.bos_choch, 'price') and result.bos_choch.price else "  Price  : N/A")
 else:
     print("--- BOS/CHOCH Signal: None ---")
 

@@ -9,7 +9,6 @@ SL/TP (Binance server-side di live mode, SLTPManager di paper mode).
 Alasan: "Kalo dah masuk trade, bodo amat mau kena SL atau TP" — biar SL/TP natural.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session

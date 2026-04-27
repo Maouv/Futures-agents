@@ -2,10 +2,7 @@
 test_sltp_manager.py — Unit tests untuk SL/TP Manager.
 Fokus: Multi-pair error handling (BUG #5 fix).
 """
-import pytest
 from datetime import datetime, timezone
-from _pytest.logging import LogCaptureFixture
-from loguru import logger
 
 from src.agents.math.sltp_manager import check_paper_trades
 from src.data.storage import PaperTrade, init_db, get_session
@@ -26,7 +23,6 @@ class TestSLTPManagerMultiPair:
         Test bahwa jika ada trade dengan pair yang tidak ada di price dict,
         akan log ERROR (bukan WARNING).
         """
-        from datetime import datetime, timezone
 
         # Setup: Buat 2 paper trades dengan pair berbeda
         with get_session() as db:
@@ -73,7 +69,6 @@ class TestSLTPManagerMultiPair:
         """
         Test bahwa jika semua pair ada di price dict, tidak ada error.
         """
-        from datetime import datetime, timezone
 
         # Setup: Buat 2 trades
         with get_session() as db:
@@ -121,7 +116,6 @@ class TestSLTPManagerMultiPair:
         """
         Test bahwa error log menyertakan context: trade ID dan available pairs.
         """
-        from datetime import datetime, timezone
 
         # Setup
         with get_session() as db:

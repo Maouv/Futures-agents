@@ -3,9 +3,7 @@ test_phase8.py — Unit tests untuk Phase 8 components.
 Fokus: exchange factory, kill switch, execution validation, WS order parsing.
 """
 import os
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # ── Kill Switch Tests ────────────────────────────────────────────────────────
 
@@ -176,7 +174,7 @@ class TestWSOrderParsing:
 class TestDBMigration:
     def test_migrate_adds_columns(self, tmp_path):
         """migrate_db() should add new columns to existing tables."""
-        from src.data.storage import Base, PaperTrade, migrate_db
+        from src.data.storage import migrate_db
         from sqlalchemy import create_engine, inspect
 
         db_path = str(tmp_path / "test_trading.db")

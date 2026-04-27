@@ -5,12 +5,11 @@ HANYA untuk live/testnet mode. Paper mode SL/TP di-handle oleh sltp_manager.
 Trailing stop: step-based SL adjustment saat unrealized profit mencapai threshold.
 Liquidation price: estimasi harga likuidasi (simplified formula).
 """
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
-from src.utils.exchange import cancel_algo_order, place_algo_order, reset_exchange
+from src.utils.exchange import cancel_algo_order, place_algo_order
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
 

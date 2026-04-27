@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import (
-    Column, DateTime, Float, Integer, String, Text,
+    DateTime, Float, Integer, String, Text,
     create_engine, Index, text, event
 )
 from sqlalchemy.exc import OperationalError

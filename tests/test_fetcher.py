@@ -2,7 +2,6 @@
 test_fetcher.py — Unit tests untuk safety checks di ohlcv_fetcher.
 Fokus: Gap Detector dan Session Filter.
 """
-import pytest
 import pandas as pd
 from datetime import datetime, timezone
 

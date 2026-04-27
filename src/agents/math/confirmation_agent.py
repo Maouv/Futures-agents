@@ -3,7 +3,6 @@ confirmation_agent.py — Konfirmasi signal H1 di timeframe 15m.
 """
 import pandas as pd
 from pydantic import BaseModel
-from typing import Optional
 
 from src.agents.math.base_agent import BaseAgent
 from src.indicators.luxalgo_smc import detect_all

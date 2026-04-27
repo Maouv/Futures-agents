@@ -7,7 +7,6 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pandas as pd
 from src.data.ohlcv_fetcher import fetch_ohlcv
 from src.indicators.luxalgo_smc import detect_all
 
@@ -94,13 +93,13 @@ def analyze_pair(symbol: str, timeframe: str = "1h"):
 
         # If bullish OB below price = demand zone, bearish OB above = supply zone
         if closest_ob.bias == 1 and ob_mid < current_price:
-            print(f"    → Demand zone (support) — price could bounce here if it drops")
+            print("    → Demand zone (support) — price could bounce here if it drops")
         elif closest_ob.bias == -1 and ob_mid > current_price:
-            print(f"    → Supply zone (resistance) — price could reject here if it rises")
+            print("    → Supply zone (resistance) — price could reject here if it rises")
         elif closest_ob.bias == 1 and ob_mid > current_price:
-            print(f"    → Bullish OB above price — potential resistance flip to support on breakout")
+            print("    → Bullish OB above price — potential resistance flip to support on breakout")
         elif closest_ob.bias == -1 and ob_mid < current_price:
-            print(f"    → Bearish OB below price — potential support flip to resistance on breakdown")
+            print("    → Bearish OB below price — potential support flip to resistance on breakdown")
 
     # Closest FVG
     if unfilled_fvgs:
@@ -142,7 +141,7 @@ def analyze_pair(symbol: str, timeframe: str = "1h"):
             mid = (c["zone_top"] + c["zone_bottom"]) / 2
             print(f"    Zone [{c['zone_bottom']:.2f} - {c['zone_top']:.2f}] — OB:{ob_bias} + FVG:{fvg_bias} → Mid: {mid:.2f}")
     else:
-        print(f"\n  * No OB+FVG confluence zones found")
+        print("\n  * No OB+FVG confluence zones found")
 
     # Potential entry
     if unmitigated_obs:
@@ -156,10 +155,10 @@ def analyze_pair(symbol: str, timeframe: str = "1h"):
             print(f"    Entry at OB Midpoint: {entry_mid:.2f}")
             if result.current_bias == 1:
                 print(f"    SL below OB Low: {entry_ob.low:.2f}")
-                print(f"    → Wait for price to pull back to OB zone, then LONG")
+                print("    → Wait for price to pull back to OB zone, then LONG")
             elif result.current_bias == -1:
                 print(f"    SL above OB High: {entry_ob.high:.2f}")
-                print(f"    → Wait for price to pull back to OB zone, then SHORT")
+                print("    → Wait for price to pull back to OB zone, then SHORT")
         else:
             print(f"\n  * No OB aligned with current {BIAS_LABEL[result.current_bias]} bias — no clear entry setup")
 
@@ -182,9 +181,9 @@ def main():
     pairs = [p.upper() for p in args.pairs]
 
     header = " + ".join(pairs) if len(pairs) <= 3 else f"{len(pairs)} pairs"
-    print(f"╔══════════════════════════════════════════════════════════╗")
+    print("╔══════════════════════════════════════════════════════════╗")
     print(f"║        SMC ANALYSIS — {header:<33s}║")
-    print(f"╚══════════════════════════════════════════════════════════╝")
+    print("╚══════════════════════════════════════════════════════════╝")
 
     for symbol in pairs:
         try:

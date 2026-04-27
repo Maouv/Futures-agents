@@ -96,7 +96,7 @@ def test_trade_result_fields():
         current_drawdown_pct=5.5,
     )
 
-    print(f"\n✓ SKIPPED trade created successfully")
+    print("\n✓ SKIPPED trade created successfully")
     print(f"  exit_reason: {skipped_trade.exit_reason}")
     print(f"  pnl: {skipped_trade.pnl}")
 

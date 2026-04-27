@@ -22,7 +22,6 @@ SAVE_EVERY = 50                 # Save checkpoint setiap N episodes
 
 # ==========================================
 
-import os
 import glob
 import random
 from pathlib import Path

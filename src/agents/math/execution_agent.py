@@ -27,7 +27,7 @@ from src.agents.math.trend_agent import TrendResult
 from src.utils.exchange import get_exchange, reset_exchange, place_algo_order
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
-from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.mode import get_current_mode
 from src.utils.trade_utils import calculate_pnl, close_trade
 from src.agents.math.position_manager import calculate_liquidation_price
 

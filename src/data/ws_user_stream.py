@@ -19,12 +19,10 @@ import asyncio
 import json
 import threading
 import time
-from datetime import datetime, timezone
 from typing import Optional, Callable
 
 import websockets
 
-from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, get_ws_base_url, reset_exchange
 from src.utils.logger import logger

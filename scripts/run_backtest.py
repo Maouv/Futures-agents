@@ -221,7 +221,7 @@ def main():
         print(f"{'='*60}")
 
         # Print trade distribution
-        print(f"\nTRADE DISTRIBUTION")
+        print("\nTRADE DISTRIBUTION")
         print(f"{'='*60}")
         tp_trades = sum(1 for t in all_trades if t.exit_reason == 'TP')
         sl_trades = sum(1 for t in all_trades if t.exit_reason == 'SL')

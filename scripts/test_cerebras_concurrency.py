@@ -15,7 +15,6 @@ import json
 from datetime import datetime
 
 from src.config.settings import settings
-from src.utils.logger import logger
 
 
 # ── Helper ──────────────────────────────────────────────────────────────────
@@ -177,7 +176,7 @@ async def test_batched_with_delay():
 
     # Batch 2: 1 pair
     batch2 = [await call_cerebras(PAIRS[3], sem)]
-    print(f"  Batch 2 done (1 call)")
+    print("  Batch 2 done (1 call)")
 
     total = time.monotonic() - start
     results = list(batch1) + batch2

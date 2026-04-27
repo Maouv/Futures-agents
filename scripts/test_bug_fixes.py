@@ -52,7 +52,7 @@ def test_bug3_position_size():
     print(f"Expected Position Size: {expected_position_size:.6f}")
     print(f"Match: {result.position_size == expected_position_size}")
     print(f"\nActual Risk: ${actual_risk:.2f}")
-    print(f"Target Risk: $10.00")
+    print("Target Risk: $10.00")
     print(f"Risk Match: {abs(actual_risk - 10.0) < 0.01}")
 
     assert abs(result.position_size - expected_position_size) < 0.0001, "Position size formula salah!"

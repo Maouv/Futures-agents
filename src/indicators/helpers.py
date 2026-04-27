@@ -4,7 +4,6 @@ Semua fungsi WAJIB pure Python/pandas — DILARANG pakai LLM.
 """
 from typing import Union
 import pandas as pd
-import numpy as np
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
