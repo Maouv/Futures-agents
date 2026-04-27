@@ -183,7 +183,7 @@ def _coerce_value(value, target_type):
     if isinstance(value, target_type):
         return value
     try:
-        if target_type == bool:
+        if target_type is bool:
             if isinstance(value, str):
                 return value.lower() in ('true', '1', 'yes')
             return bool(value)

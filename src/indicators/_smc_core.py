@@ -24,10 +24,10 @@ def inputvalidator(input_="ohlc"):
             if inputs["c"] != "close":
                 kwargs["column"] = inputs["c"]
 
-            for l in input_:
-                if inputs[l] not in args[i].columns:
+            for col in input_:
+                if inputs[col] not in args[col].columns:
                     raise LookupError(
-                        'Must have a dataframe column named "{0}"'.format(inputs[l])
+                        'Must have a dataframe column named "{0}"'.format(inputs[col])
                     )
 
             return func(*args, **kwargs)

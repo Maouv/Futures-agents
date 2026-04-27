@@ -171,7 +171,6 @@ def log_weight_summary(pair_count: int) -> None:
     total_balance = WEIGHT_TABLE["balance"]  # 1x per cycle
     total_order = pair_count * WEIGHT_TABLE["order"]  # worst case
     total_worst = total_ohlcv + total_balance + total_order
-    cycles_per_min = 1  # cycle tiap 15 menit
 
     logger.info(
         f"API Weight Estimate per cycle: "

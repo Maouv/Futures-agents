@@ -58,8 +58,6 @@ class ReversalAgent(BaseAgent):
             )
 
         current_price = df_h1["close"].iloc[-1]
-        candle_high = df_h1["high"].iloc[-1]
-        candle_low = df_h1["low"].iloc[-1]
 
         # Cari OB aktif terdekat berdasarkan proximity (2x ATR)
         atr = calculate_atr(df_h1).iloc[-1]
