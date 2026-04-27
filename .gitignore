@@ -37,4 +37,4 @@ data/rl_models/
 .streamlit/
 
 # backup file
-*.py
+*.bak
