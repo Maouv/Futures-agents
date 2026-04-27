@@ -35,7 +35,6 @@ src/indicators/
   luxalgo_smc.py                  → Public API: detect_order_blocks(), detect_fvg(), detect_bos_choch()
   mean_reversion.py               → RSI + Bollinger Bands
   helpers.py                      → ATR, Swing High-Low
-src/rl/                           → RL filter — training on Colab, ONNX inference on VPS
   environment.py                  → TradingEnvironment, 13 features, SKIP/ENTRY
   dqn_agent.py                    → DQN + Thompson Sampling, ONNX export
   inference.py                    → ONNX Runtime inference (VPS)
@@ -53,8 +52,6 @@ src/utils/
   logger.py                       → Loguru setup
 
 data/historical/    → CSV OHLCV per pair×timeframe (backtest input)
-data/rl_models/     → ONNX model + normalization params (VPS inference)
-data/rl_training/   → Signal CSV per pair×year (Colab training input)
 data/backtest_results/ → Backtest output
 tests/              → Pytest unit tests (CI-ready)
 scripts/            → Manual utility & test scripts (not for CI)

@@ -45,24 +45,6 @@ httpx==0.27.0             # HTTP Client modern (Untuk fetch DefiLlama / On-chain
 websockets==12.0          # Library WS murni Python (Phase 8: User Data Stream — bukan market data)
 
 # ==========================================
-# REINFORCEMENT LEARNING (PHASE 7 - COLAB ONLY, BUKAN VPS)
-# ==========================================
-# ⚠️ CATATAN UNTUK CLAUDE CODE:
-# JANGAN install 3 package di bawah ini di VPS trading.
-# Alur Phase 7:
-#   1. Export data/trading.db → CSV dari VPS
-#   2. Upload CSV ke Google Colab (gratis, GPU T4)
-#   3. Training PPO di Colab (bukan di VPS)
-#   4. Download model .zip dari Colab
-#   5. Upload model ke VPS: data/rl_models/best_model.zip
-#   6. Bot baca model dari path itu
-# Jika user belum sampai Phase 7, SKIP install package ini.
-# Jika user minta install di VPS, INGATKAN risiko OOM dan sarankan Colab.
-# gymnasium==0.29.1         # Install di Colab saja
-# stable-baselines3==2.3.2  # Install di Colab saja
-# torch==2.3.1              # Install di Colab saja — terlalu berat untuk VPS 8GB RAM
-
-# ==========================================
 # DEVELOPMENT & TESTING
 # ==========================================
 pytest==8.2.2             # Framework untuk menulis Unit Test (Validasi LuxAlgo di Phase 2)

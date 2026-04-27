@@ -102,43 +102,9 @@
 - [x] Bisa dijalankan via `run.sh` dan PM2
 - [x] **6.3** Paper mode standalone di-skip — langsung integrasi ke Binance Futures Testnet di Phase 8. Paper trade tanpa exchange integration tidak menghasilkan data yang cukup valid untuk training RL.
 
-### 🔄 PHASE 7: Reinforcement Learning — IMPLEMENTED (Siap Training)
+### 🎯 PHASE 7: Go Live + Testnet Integration — PRIORITAS SEKARANG
 
-*Kode sudah ada. Karena paper trade standalone di-skip, data training RL berasal dari **backtest CSV** (bukan live paper trades). Ini valid karena backtest sudah pakai fee + slippage aktual.*
-
-- [x] `src/rl/environment.py` — `TradingEnvironment`, state vector 13 fitur, reward shaping SKIP/ENTRY
-- [x] `src/rl/dqn_agent.py` — DQN + Thompson Sampling (Beta distribution per action), ONNX export
-- [x] `src/rl/trainer.py` — Multi-pair training loop, checkpoint saving, training curve plotting
-- [x] `src/rl/replay_buffer.py` — Experience replay buffer
-- [x] `src/rl/inference.py` — ONNX Runtime inference engine untuk VPS
-- [x] `test_rl_environment.py` — Unit tests reward shaping
-- [ ] **7.1** Jalankan backtest multi-pair untuk generate CSV training data:
-  ```bash
-  python scripts/run_backtest.py --pairs BTCUSDT,ETHUSDT,SOLUSDT \
-      --h4-csv data/historical/BTCUSDT-4h.csv \
-      --h1-csv data/historical/BTCUSDT-1h.csv \
-      --m15-csv data/historical/BTCUSDT-15m.csv
-  # Output: data/rl_training/*.csv (satu file per pair)
-  ```
-- [ ] **7.2** `scripts/export_trade_data.py` — **BELUM DIBUAT**, perlu dibuat untuk export CSV ke format yang kompatibel dengan `TradingEnvironment`
-- [ ] **7.3** Jalankan training di Google Colab (GPU T4):
-  ```python
-  # Upload data/rl_training/*.csv + src/rl/ ke Colab
-  # pip install torch onnx numpy pandas loguru
-  # Jalankan DQNTrainer, save best_model.onnx + normalization_params.npz
-  ```
-- [ ] **7.4** Upload model ke VPS:
-  ```bash
-  scp best_model.onnx normalization_params.npz root@vps:/path/data/rl_models/
-  ```
-- [ ] **7.5** Verifikasi RL filter di backtest:
-  ```bash
-  python scripts/run_backtest.py --pairs BTCUSDT --use-rl
-  ```
-
-### 🎯 PHASE 8: Go Live + Testnet Integration — PRIORITAS SEKARANG
-
-*Phase ini sekaligus menggantikan paper trade standalone (Phase 6.3 yang di-skip). Data dari Testnet inilah yang akan dipakai sebagai training data Phase 7.*
+*Phase ini sekaligus menggantikan paper trade standalone (Phase 6.3 yang di-skip).*
 
 - [ ] **8.1** Set `.env`: `EXECUTION_MODE=live`, `USE_TESTNET=True`, `BINANCE_TESTNET_KEY`, `BINANCE_TESTNET_SECRET`
 - [ ] **8.2** Implementasi `execution_agent.py` Live mode:

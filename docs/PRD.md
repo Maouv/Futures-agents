@@ -74,16 +74,6 @@ Sistem trading bot otonom berbasis multi-agent yang berjalan 24/7 di VPS (Contab
 ### FR-4: Reinforcement Learning Layer
 
 - **FR-4.1 (Environment):** Custom `TradingEnvironment` (non-gymnasium) yang konsumsi CSV signals dari backtest. Action space: `SKIP=0` / `ENTRY=1`. State vector: 13 fitur. *(Implemented: `src/rl/environment.py`)*
-- **FR-4.2 (DQN Agent + Thompson Sampling):** DQN dengan arsitektur `[input → 128 → 64 → output]`. Exploration menggunakan Thompson Sampling (Beta distribution per action) — lebih adaptive dari epsilon-greedy. *(Implemented: `src/rl/dqn_agent.py`)*
-- **FR-4.3 (Training — Google Colab):** Training dilakukan di Colab (GPU T4), BUKAN di VPS. Multi-pair training: load semua CSV dari `data/rl_training/`. Export model ke ONNX. *(Implemented: `src/rl/trainer.py`)*
-- **FR-4.4 (Inference — VPS):** Deploy model ONNX ke VPS, jalankan via `onnxruntime` (tanpa PyTorch). RL filter adalah lapisan opsional (`use_rl=True` di BacktestEngine). *(Implemented: `src/rl/inference.py`)*
-- **FR-4.5 (Reward Shaping):**
-  - ENTRY + TP → actual PnL (positif)
-  - ENTRY + SL/TIMEOUT → actual PnL (negatif)
-  - SKIP + TP → -0.5 (missed opportunity)
-  - SKIP + SL/TIMEOUT → +0.3 (avoided loss)
-  - SKIP + SKIPPED → 0.0 (neutral)
-
 ### FR-5: Backtest Engine
 
 - **FR-5.1:** Load data dari CSV historis Binance Vision (H4, H1, 15m per pair). Jalankan pipeline Math Agents. Simulasi entry/exit dengan high/low candle (bukan close) untuk menghindari look-ahead bias. *(Implemented: `src/backtest/engine.py`)*

@@ -9,10 +9,7 @@ FIXES v2:
 - Bug #3: Exit check pakai high/low candle, bukan close (mencegah look-ahead bias)
 """
 import os
-import csv
 from typing import List, Optional
-from pathlib import Path
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -61,9 +58,6 @@ class BacktestEngine:
         tp_percent: float = 0.02,
         sl_percent: float = 0.01,
         use_confirmation: bool = False,
-        use_rl: bool = False,
-        rl_model_path: str = "data/rl_models/best_model.onnx",
-        rl_norm_path: str = "data/rl_models/normalization_params.npz",
     ):
         self.h4_csv_path  = h4_csv_path
         self.h1_csv_path  = h1_csv_path
@@ -75,31 +69,12 @@ class BacktestEngine:
         self.tp_percent = tp_percent
         self.sl_percent = sl_percent
         self.use_confirmation = use_confirmation
-        self.use_rl = use_rl
 
         self.trend_agent        = TrendAgent()
         self.reversal_agent     = ReversalAgent()
         self.confirmation_agent = ConfirmationAgent()
 
         self.trades: List[TradeResult] = []
-
-        # State tracking for RL features
-        self._last_trade_exit_time: Optional[int] = None
-        self._consecutive_losses: int = 0
-
-        # RL inference engine
-        self._rl_engine = None
-        if self.use_rl:
-            try:
-                from src.rl.inference import load_inference_engine
-                self._rl_engine = load_inference_engine(
-                    model_path=rl_model_path,
-                    norm_params_path=rl_norm_path
-                )
-                logger.info(f"RL filter ENABLED - model: {rl_model_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load RL model: {e}. Running without RL filter.")
-                self.use_rl = False
 
     # ── Data loading ─────────────────────────────────────────────────────────
 
@@ -122,96 +97,6 @@ class BacktestEngine:
 
         logger.info(f"Loaded {len(df)} candles from {path}")
         return df
-
-    # ── Helper methods for RL state tracking ───────────────────────────────────
-
-    def _build_rl_state(
-        self,
-        trend_bias: str,
-        bos_choch: Optional[object],
-        ob_high: float,
-        ob_low: float,
-        ob_size: float,
-        distance_to_ob: float,
-        atr: float,
-        fvg_present: bool,
-        candle_body_ratio: float,
-        entry_time: int,
-    ) -> np.ndarray:
-        """Build 13-feature state vector for RL inference."""
-
-        # Encode trend_bias
-        trend_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGING': 0}
-        trend_bias_val = trend_map.get(trend_bias, 0)
-
-        # Encode bos_type
-        bos_type_val = 0
-        if bos_choch is not None:
-            if bos_choch.bias == 1:
-                bos_type_val = 1 if bos_choch.type == "BOS" else 1  # BULLISH
-            else:
-                bos_type_val = -1 if bos_choch.type == "BOS" else -1  # BEARISH
-
-        # Extract hour
-        entry_dt = pd.to_datetime(entry_time, unit='ms', utc=True)
-        hour_of_day = entry_dt.hour
-
-        # State tracking features
-        consecutive_losses = self._calculate_consecutive_losses()
-        time_since_last_trade = self._calculate_time_since_last_trade(entry_time)
-        current_drawdown_pct = self._calculate_drawdown_pct(self.initial_balance)
-
-        # Build state vector (13 features, must match environment.py state_columns)
-        state = np.array([
-            trend_bias_val,          # 1. trend_bias
-            bos_type_val,            # 2. bos_type
-            ob_high,                 # 3. ob_high
-            ob_low,                  # 4. ob_low
-            ob_size,                 # 5. ob_size
-            distance_to_ob,          # 6. distance_to_ob
-            atr,                     # 7. atr
-            int(fvg_present),        # 8. fvg_present
-            candle_body_ratio,       # 9. candle_body_ratio
-            hour_of_day,             # 10. hour_of_day
-            consecutive_losses,      # 11. consecutive_losses
-            time_since_last_trade,   # 12. time_since_last_trade
-            current_drawdown_pct,    # 13. current_drawdown_pct
-        ], dtype=np.float32)
-
-        return state
-
-    def _calculate_consecutive_losses(self) -> int:
-        """Calculate consecutive losses from recent trades."""
-        if not self.trades:
-            return 0
-
-        consecutive = 0
-        # Iterate backwards through trades
-        for trade in reversed(self.trades):
-            if trade.pnl < 0:
-                consecutive += 1
-            else:
-                break  # Stop at first winning trade
-
-        return consecutive
-
-    def _calculate_time_since_last_trade(self, current_time: int) -> int:
-        """Calculate minutes since last trade exit."""
-        if self._last_trade_exit_time is None:
-            return 0
-
-        time_diff_ms = current_time - self._last_trade_exit_time
-        time_diff_minutes = time_diff_ms // 60000  # Convert ms to minutes
-
-        return time_diff_minutes
-
-    def _calculate_drawdown_pct(self, current_balance: float) -> float:
-        """Calculate current drawdown percentage from peak."""
-        if current_balance >= self.initial_balance:
-            return 0.0
-
-        drawdown = ((self.initial_balance - current_balance) / self.initial_balance) * 100
-        return drawdown
 
     # ── Main backtest loop ───────────────────────────────────────────────────
 
@@ -307,13 +192,6 @@ class BacktestEngine:
                     self.trades.append(trade)
                     balance += trade.pnl
 
-                    # Update state tracking for next trades
-                    self._last_trade_exit_time = trade.exit_time
-                    if trade.pnl < 0:
-                        self._consecutive_losses += 1
-                    else:
-                        self._consecutive_losses = 0  # Reset on win
-
                     position = None
 
             # Skip kalau masih ada posisi terbuka
@@ -400,17 +278,6 @@ class BacktestEngine:
                 f"Size: {position_size:.6f} | Margin: ${margin_required:.2f}"
             )
 
-            # Calculate candle body ratio for RL feature
-            current_candle = df_h1.iloc[i]
-            candle_range = current_candle['high'] - current_candle['low']
-            candle_body = abs(current_candle['close'] - current_candle['open'])
-            candle_body_ratio = candle_body / candle_range if candle_range > 0 else 0.0
-
-            # Calculate distance from current candle close to OB midpoint
-            current_close = current_candle['close']
-            ob_midpoint = (ob.high + ob.low) / 2.0
-            distance_to_ob = abs(current_close - ob_midpoint)
-
             position = {
                 'entry_time':    current_time,
                 'entry_price':   entry_price,
@@ -426,47 +293,7 @@ class BacktestEngine:
                 'ob_low':        ob.low,
                 'trend_bias':    trend_result.bias_label,
                 'confidence':    reversal_result.confidence,
-                # RL training features
-                'bos_choch':     reversal_result.bos_choch,
-                'fvg_present':   reversal_result.fvg is not None,
-                'candle_body_ratio': candle_body_ratio,
-                'distance_to_ob': distance_to_ob,
             }
-
-            # ── RL Filter: Skip trade if RL model disagrees ──────────────
-            if self.use_rl and self._rl_engine is not None:
-                ob_size = ob.high - ob.low
-                rl_state = self._build_rl_state(
-                    trend_bias=trend_result.bias_label,
-                    bos_choch=reversal_result.bos_choch,
-                    ob_high=ob.high,
-                    ob_low=ob.low,
-                    ob_size=ob_size,
-                    distance_to_ob=distance_to_ob,
-                    atr=atr,
-                    fvg_present=reversal_result.fvg is not None,
-                    candle_body_ratio=candle_body_ratio,
-                    entry_time=current_time,
-                )
-
-                action, q_values = self._rl_engine.select_action(rl_state, strategy="greedy")
-                confidence = self._rl_engine.get_state_importance(rl_state)
-
-                if action == 0:  # RL says SKIP
-                    debug_counters['rl_skipped'] = debug_counters.get('rl_skipped', 0) + 1
-                    logger.info(
-                        f"RL SKIP candle {i} | "
-                        f"Q-values: [{q_values[0]:.4f}, {q_values[1]:.4f}] | "
-                        f"Confidence: {confidence:.4f}"
-                    )
-                    continue
-                else:
-                    debug_counters['rl_approved'] = debug_counters.get('rl_approved', 0) + 1
-                    logger.info(
-                        f"RL APPROVE candle {i} | "
-                        f"Q-values: [{q_values[0]:.4f}, {q_values[1]:.4f}] | "
-                        f"Confidence: {confidence:.4f}"
-                    )
 
         # ── Hitung metrics ────────────────────────────────────────────────
         metrics = calculate_metrics(self.trades, initial_balance=self.initial_balance)
@@ -579,29 +406,6 @@ class BacktestEngine:
         # Calculate candles held
         candles_held = exit_index - position['entry_index']
 
-        # ── Populate RL training fields ─────────────────────────────────────
-        # Extract BOS type
-        bos_type = "NONE"
-        if position.get('bos_choch'):
-            bc = position['bos_choch']
-            if bc.bias == 1:  # BULLISH
-                bos_type = "BULLISH_BOS" if bc.type == "BOS" else "BULLISH_CHOCH"
-            else:  # BEARISH
-                bos_type = "BEARISH_BOS" if bc.type == "BOS" else "BEARISH_CHOCH"
-
-        # Calculate OB size and distance
-        ob_size = position.get('ob_high', 0.0) - position.get('ob_low', 0.0)
-        distance_to_ob = position.get('distance_to_ob', 0.0)
-
-        # Extract hour of day from entry timestamp
-        entry_dt = pd.to_datetime(position['entry_time'], unit='ms', utc=True)
-        hour_of_day = entry_dt.hour
-
-        # Calculate state tracking features
-        consecutive_losses = self._calculate_consecutive_losses()
-        time_since_last_trade = self._calculate_time_since_last_trade(position['entry_time'])
-        current_drawdown_pct = self._calculate_drawdown_pct(position['balance_at_entry'])
-
         return TradeResult(
             entry_time=position['entry_time'],
             exit_time=exit_time,
@@ -621,108 +425,5 @@ class BacktestEngine:
             ob_low=position.get('ob_low', 0.0),
             trend_bias=position.get('trend_bias', 'RANGING'),
             confidence=position.get('confidence', 0),
-            # RL training fields
-            bos_type=bos_type,
-            ob_size=ob_size,
-            distance_to_ob=distance_to_ob,
-            fvg_present=position.get('fvg_present', False),
-            candle_body_ratio=position.get('candle_body_ratio', 0.0),
-            hour_of_day=hour_of_day,
-            consecutive_losses=consecutive_losses,
-            time_since_last_trade=time_since_last_trade,
-            current_drawdown_pct=current_drawdown_pct,
         )
 
-    # ── Export to CSV ─────────────────────────────────────────────────────────
-
-    def export_to_csv(self, output_path: str, pair: str = "BTCUSDT", year: Optional[int] = None) -> str:
-        """
-        Export trades to CSV file.
-
-        Args:
-            output_path: Directory path untuk menyimpan CSV
-            pair: Trading pair (e.g., 'BTCUSDT')
-            year: Year filter untuk filename
-
-        Returns:
-            Full path ke CSV file yang dibuat
-        """
-        if not self.trades:
-            logger.warning("No trades to export")
-            return ""
-
-        # Create output directory jika belum ada
-        output_dir = Path(output_path)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate filename
-        year_str = str(year) if year else "all"
-        filename = f"{pair}_{year_str}_signals.csv"
-        filepath = output_dir / filename
-
-        # Define CSV columns (RL training format - matches environment expectations)
-        fieldnames = [
-            'timestamp',           # Changed from 'timestamp_entry' for environment compatibility
-            'pair',
-            'signal',
-            'entry_price',
-            'sl_price',
-            'tp_price',
-            'outcome',
-            'pnl',
-            'candles_held',
-            'atr',
-            'ob_high',
-            'ob_low',
-            'ob_size',
-            'distance_to_ob',
-            'trend_bias',
-            'bos_type',
-            'fvg_present',
-            'candle_body_ratio',
-            'hour_of_day',
-            'consecutive_losses',
-            'time_since_last_trade',
-            'current_drawdown_pct',
-            'confidence'
-        ]
-
-        # Write to CSV
-        try:
-            with open(filepath, 'w', newline='') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-
-                for trade in self.trades:
-                    writer.writerow({
-                        'timestamp': trade.entry_time,  # Use entry_time as timestamp for RL
-                        'pair': pair,
-                        'signal': trade.side,
-                        'entry_price': f"{trade.entry_price:.2f}",
-                        'sl_price': f"{trade.sl_price:.2f}",
-                        'tp_price': f"{trade.tp_price:.2f}",
-                        'outcome': trade.exit_reason,
-                        'pnl': f"{trade.pnl:.2f}",
-                        'candles_held': trade.candles_held,
-                        'atr': f"{trade.atr:.2f}",
-                        'ob_high': f"{trade.ob_high:.2f}",
-                        'ob_low': f"{trade.ob_low:.2f}",
-                        'ob_size': f"{trade.ob_size:.2f}",
-                        'distance_to_ob': f"{trade.distance_to_ob:.2f}",
-                        'trend_bias': trade.trend_bias,
-                        'bos_type': trade.bos_type,
-                        'fvg_present': int(trade.fvg_present),
-                        'candle_body_ratio': f"{trade.candle_body_ratio:.4f}",
-                        'hour_of_day': trade.hour_of_day,
-                        'consecutive_losses': trade.consecutive_losses,
-                        'time_since_last_trade': trade.time_since_last_trade,
-                        'current_drawdown_pct': f"{trade.current_drawdown_pct:.2f}",
-                        'confidence': trade.confidence,
-                    })
-
-            logger.info(f"Exported {len(self.trades)} trades to {filepath}")
-            return str(filepath)
-
-        except Exception as e:
-            logger.error(f"Failed to export CSV: {e}")
-            return ""

@@ -87,17 +87,7 @@ def main():
         default='BTCUSDT',
         help='Trading pairs comma-separated (default: BTCUSDT). Example: BTCUSDT,ETHUSDT,SOLUSDT'
     )
-    parser.add_argument(
-        '--export-csv',
-        action='store_true',
-        help='Export trades to CSV file'
-    )
-    parser.add_argument(
-        '--use-rl',
-        action='store_true',
-        help='Enable RL model filter (requires trained ONNX model)'
-    )
-
+    
     args = parser.parse_args()
 
     # Parse pairs
@@ -154,7 +144,6 @@ def main():
             tp_percent=args.tp_percent,
             sl_percent=args.sl_percent,
             use_confirmation=args.use_confirmation,
-            use_rl=args.use_rl,
         )
 
         # Run backtest for this pair
@@ -180,17 +169,6 @@ def main():
 
         # Collect trades from this pair
         all_trades.extend(engine.trades)
-
-        # Export to CSV if flag is set
-        if args.export_csv:
-            csv_path = engine.export_to_csv(
-                output_path=str(project_root / 'data' / 'rl_training'),
-                pair=pair,
-                year=args.year
-            )
-
-            if csv_path:
-                print(f"CSV exported to: {csv_path}")
 
     # After all pairs processed, calculate combined metrics
     if all_trades:

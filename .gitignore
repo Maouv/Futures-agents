@@ -26,8 +26,6 @@ build/
 *.log
 logs/
 
-# RL Models (Phase 7)
-data/rl_models/
 
 # Codinh tools
 .claude/

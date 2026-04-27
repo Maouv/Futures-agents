@@ -26,17 +26,6 @@ class TradeResult(BaseModel):
     ob_low: float = 0.0
     trend_bias: str = "RANGING"  # 'BULLISH', 'BEARISH', 'RANGING'
     confidence: int = 0
-    # New fields for RL training
-    bos_type: str = "NONE"        # 'BULLISH_BOS', 'BULLISH_CHOCH', 'BEARISH_BOS', 'BEARISH_CHOCH', 'NONE'
-    ob_size: float = 0.0          # OB high - low
-    distance_to_ob: float = 0.0   # Distance from entry to OB midpoint
-    fvg_present: bool = False     # Is FVG present as confluence
-    candle_body_ratio: float = 0.0  # abs(close - open) / (high - low)
-    hour_of_day: int = 0          # Hour in UTC (0-23)
-    consecutive_losses: int = 0   # Consecutive losses before this trade
-    time_since_last_trade: int = 0  # Minutes since last trade
-    current_drawdown_pct: float = 0.0  # Current drawdown percentage at entry
-
 
 class BacktestMetrics(BaseModel):
     """Aggregated backtest metrics."""
