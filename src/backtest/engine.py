@@ -12,6 +12,7 @@ import os
 import csv
 from typing import List, Optional
 from pathlib import Path
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -136,9 +137,8 @@ class BacktestEngine:
         fvg_present: bool,
         candle_body_ratio: float,
         entry_time: int,
-    ) -> "np.ndarray":
+    ) -> np.ndarray:
         """Build 13-feature state vector for RL inference."""
-        import numpy as np
 
         # Encode trend_bias
         trend_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGING': 0}
@@ -726,4 +726,3 @@ class BacktestEngine:
         except Exception as e:
             logger.error(f"Failed to export CSV: {e}")
             return ""
-

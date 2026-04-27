@@ -395,14 +395,19 @@ class TradingBot:
                     active_pairs.add(symbol)
 
             # ── 2. Fetch open limit orders (untuk cek PENDING_ENTRY trades) ─
-            # exchange_order_id di DB adalah orderId biasa (bukan algoId)
-            # sehingga fetch_open_orders() bisa dipakai untuk verifikasi
-            open_orders = exchange.fetch_open_orders()
+            # Fetch per-symbol (bukan semua sekaligus) untuk hindari rate limit.
+            # fetch_open_orders() tanpa symbol dibatasi 1 call per 352 detik oleh Binance.
             active_order_ids = set()
-            for o in open_orders:
-                oid = str(o.get('id', ''))
-                if oid:
-                    active_order_ids.add(oid)
+            for pair in self.pairs:
+                try:
+                    ccxt_sym = self._pair_to_ccxt_symbol(pair)
+                    orders = exchange.fetch_open_orders(ccxt_sym)
+                    for o in orders:
+                        oid = str(o.get('id', ''))
+                        if oid:
+                            active_order_ids.add(oid)
+                except Exception as e:
+                    logger.warning(f"Could not fetch open orders for {pair}: {e}")
 
             logger.info(
                 f"Binance state: {len(active_pairs)} active positions, "

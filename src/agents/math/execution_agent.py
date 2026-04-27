@@ -443,7 +443,7 @@ class ExecutionAgent(BaseAgent):
                 self._log(f"TP algo placed | ID: {tp_order_id} | Trigger: {risk_result.tp_price:.2f}")
             except Exception as e:
                 self._send_alert(
-                    f"⚠️ TP GAGAL | Trade {trade_id} | {symbol}\n"
+                    f"⚠️ TP GAGAL | Order {exchange_order_id} | {symbol}\n"
                     f"SL @ {risk_result.sl_price:.4f} masih aktif.\n"
                     f"Error: {e}\n"
                     f"→ Manual TP perlu dipasang di Binance!"
