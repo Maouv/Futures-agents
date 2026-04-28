@@ -1,23 +1,29 @@
 """
 reversal_agent.py — Deteksi reversal signal berdasarkan SMC di H1.
 """
-from typing import Optional
+
 import pandas as pd
 from pydantic import BaseModel
 
 from src.agents.math.base_agent import BaseAgent
 from src.indicators.helpers import calculate_atr
-from src.indicators.luxalgo_smc import detect_all, OrderBlock, FairValueGap, BOSCHOCHSignal, SMCResult
+from src.indicators.luxalgo_smc import (
+    BOSCHOCHSignal,
+    FairValueGap,
+    OrderBlock,
+    SMCResult,
+    detect_all,
+)
 
 
 class ReversalResult(BaseModel):
     """Output dari ReversalAgent."""
     signal: str         # 'LONG', 'SHORT', 'NONE'
     confidence: int     # 0-100
-    ob: Optional[OrderBlock] = None       # OB yang relevan
-    fvg: Optional[FairValueGap] = None    # FVG terdekat (confluence)
-    bos_choch: Optional[BOSCHOCHSignal] = None  # Signal terbaru
-    entry_price: Optional[float] = None   # OB midpoint jika ada signal
+    ob: OrderBlock | None = None       # OB yang relevan
+    fvg: FairValueGap | None = None    # FVG terdekat (confluence)
+    bos_choch: BOSCHOCHSignal | None = None  # Signal terbaru
+    entry_price: float | None = None   # OB midpoint jika ada signal
     reason: str
 
 

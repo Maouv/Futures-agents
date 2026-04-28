@@ -4,9 +4,11 @@ Test script untuk debug TrendAgent.
 """
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import pandas as pd
+
 from src.agents.math.trend_agent import TrendAgent
 from src.indicators.luxalgo_smc import detect_bos_choch
 

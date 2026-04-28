@@ -4,29 +4,34 @@ Loop 15 menit via APScheduler (background thread).
 Telegram bot di main thread.
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.config.settings import settings
-from src.data.storage import (
-    init_db, migrate_db, PaperTrade, get_session,
-    check_db_integrity, backup_db, cleanup_stranded_trades
-)
-from src.data.ohlcv_fetcher import fetch_ohlcv, log_weight_summary
-from src.config.config_loader import load_pairs
-from src.agents.math.trend_agent import TrendAgent
-from src.agents.math.reversal_agent import ReversalAgent
-from src.agents.math.confirmation_agent import ConfirmationAgent
-from src.agents.math.risk_agent import RiskAgent, OverlapSkipError
-from src.agents.math.execution_agent import ExecutionAgent
-from src.agents.math.sltp_manager import check_paper_trades, check_paper_pending
-from src.agents.math.position_manager import check_trailing_stop
 from src.agents.llm.analyst_agent import run_analyst
+from src.agents.math.confirmation_agent import ConfirmationAgent
+from src.agents.math.execution_agent import ExecutionAgent
+from src.agents.math.position_manager import check_trailing_stop
+from src.agents.math.reversal_agent import ReversalAgent
+from src.agents.math.risk_agent import OverlapSkipError, RiskAgent
+from src.agents.math.sltp_manager import check_paper_pending, check_paper_trades
+from src.agents.math.trend_agent import TrendAgent
+from src.config.config_loader import load_pairs
+from src.config.settings import settings
+from src.data.ohlcv_fetcher import fetch_ohlcv, log_weight_summary
+from src.data.storage import (
+    PaperTrade,
+    backup_db,
+    check_db_integrity,
+    cleanup_stranded_trades,
+    get_session,
+    init_db,
+    migrate_db,
+)
 from src.telegram.bot import create_bot_app, send_notification
-from src.utils.logger import logger, setup_logger
 from src.utils.kill_switch import check_kill_switch
+from src.utils.logger import logger, setup_logger
 from src.utils.mode import get_current_mode, get_mode_label
 from src.utils.trade_utils import calculate_pnl, close_trade
 
@@ -70,7 +75,7 @@ class TradingBot:
         Untuk setiap pair: Fetch Data → Math Agents → LLM Analyst → Risk → Execution
         Lalu: SLTP Check untuk semua pair sekaligus.
         """
-        logger.info(f"=== CYCLE START {datetime.now(timezone.utc).strftime('%H:%M UTC')} ===")
+        logger.info(f"=== CYCLE START {datetime.now(UTC).strftime('%H:%M UTC')} ===")
         logger.info(f"Processing {len(self.pairs)} pairs: {', '.join(self.pairs)}")
 
         # ── Kill Switch Check ──────────────────────────────────────────────

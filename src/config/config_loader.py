@@ -15,7 +15,6 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from src.utils.logger import logger
 
@@ -43,7 +42,7 @@ def _resolve_env_vars(value):
 
 
 # ── Config cache (avoid re-reading file on every property access) ──────────────
-_config_cache: Optional[dict] = None
+_config_cache: dict | None = None
 
 
 def _load_config() -> dict:
@@ -58,7 +57,7 @@ def _load_config() -> dict:
         return _config_cache
 
     try:
-        with open(CONFIG_FILE, "r") as f:
+        with open(CONFIG_FILE) as f:
             data = json.load(f)
         _config_cache = _resolve_env_vars(data)
         return _config_cache
@@ -80,7 +79,7 @@ def set_config_override(config: dict) -> None:
     _config_cache = config
 
 
-def load_pairs() -> List[str]:
+def load_pairs() -> list[str]:
     """
     Load list of trading pairs from config.json.
     Fallback to ['BTCUSDT'] if file not found or empty.
@@ -219,7 +218,7 @@ def _coerce_config(config: dict, schema: dict) -> dict:
     return result
 
 
-def load_system_config() -> Dict:
+def load_system_config() -> dict:
     """Load system section from config.json with type coercion. Fallback to DEFAULT_SYSTEM."""
     data = _load_config()
     system = data.get("system", {})
@@ -227,7 +226,7 @@ def load_system_config() -> Dict:
     return _coerce_config(merged, DEFAULT_SYSTEM)
 
 
-def load_trading_config() -> Dict:
+def load_trading_config() -> dict:
     """Load trading section from config.json with type coercion. Fallback to DEFAULT_TRADING."""
     data = _load_config()
     trading = data.get("trading", {})
@@ -235,7 +234,7 @@ def load_trading_config() -> Dict:
     return _coerce_config(merged, DEFAULT_TRADING)
 
 
-def load_trailing_stop_config() -> Dict:
+def load_trailing_stop_config() -> dict:
     """Load trailing_stop sub-section from config.json with type coercion."""
     trading = load_trading_config()
     default_ts = DEFAULT_TRADING["trailing_stop"]
@@ -244,7 +243,7 @@ def load_trailing_stop_config() -> Dict:
     return _coerce_config(merged, default_ts)
 
 
-def load_llm_config() -> Dict:
+def load_llm_config() -> dict:
     """Load llm section from config.json with type coercion. Fallback to DEFAULT_LLM."""
     data = _load_config()
     llm = data.get("llm", {})
@@ -259,7 +258,7 @@ def load_llm_config() -> Dict:
     return result
 
 
-def load_secrets_config() -> Dict:
+def load_secrets_config() -> dict:
     """Load secrets section from config.json. ${ENV_VAR} resolved by _load_config()."""
     data = _load_config()
     secrets = data.get("secrets", {})

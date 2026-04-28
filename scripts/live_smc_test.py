@@ -20,9 +20,9 @@ tetap valid sebagai acuan institusional.
 """
 
 import argparse
-import sys
 import os
-from datetime import datetime, timezone
+import sys
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,7 +30,7 @@ import ccxt
 import pandas as pd
 
 from src.config.settings import settings
-from src.indicators.luxalgo_smc import detect_order_blocks, detect_fvg, detect_bos_choch
+from src.indicators.luxalgo_smc import detect_bos_choch, detect_fvg, detect_order_blocks
 
 
 # ── CLI Args ─────────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  SMC Live Test — {args.symbol} {args.timeframe}")
-    print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print(f"  {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}")
 
     # 1. Fetch data

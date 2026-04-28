@@ -3,6 +3,7 @@ test_analyst_prompt.py — Integration test untuk BUG #9 fix.
 Test bahwa RISK_REWARD_RATIO dari settings muncul di prompt LLM.
 """
 import inspect
+
 from src.agents.llm.analyst_agent import run_analyst
 from src.config.settings import settings
 

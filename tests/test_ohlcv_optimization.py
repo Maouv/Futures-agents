@@ -2,11 +2,11 @@
 test_ohlcv_optimization.py — Unit test untuk BUG #11 fix.
 Test bahwa bulk insert optimization bekerja dengan benar.
 """
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from src.data.ohlcv_fetcher import TIMEFRAME_MAP
-from src.data.storage import init_db, get_session
+from src.data.storage import get_session, init_db
 
 
 def test_bulk_insert_logic():

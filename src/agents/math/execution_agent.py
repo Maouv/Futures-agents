@@ -12,24 +12,24 @@ LIVE MODE:
 - Jika FILLED → pasang SL + TP, update status='OPEN'
 - Jika EXPIRED (ORDER_EXPIRY_CANDLES tercapai) → cancel order, status='EXPIRED'
 """
-import ccxt
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+import ccxt
 from pydantic import BaseModel
-from typing import Optional
 
 from src.agents.math.base_agent import BaseAgent
+from src.agents.math.position_manager import calculate_liquidation_price
+from src.agents.math.reversal_agent import ReversalResult
+from src.agents.math.risk_agent import RiskResult
+from src.agents.math.trend_agent import TrendResult
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
-from src.agents.math.risk_agent import RiskResult
-from src.agents.math.reversal_agent import ReversalResult
-from src.agents.math.trend_agent import TrendResult
-from src.utils.exchange import get_exchange, reset_exchange, place_algo_order
+from src.utils.exchange import get_exchange, place_algo_order, reset_exchange
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
 from src.utils.mode import get_current_mode
 from src.utils.trade_utils import calculate_pnl, close_trade
-from src.agents.math.position_manager import calculate_liquidation_price
 
 # ── SL Retry Constants ────────────────────────────────────────────────────
 SL_MAX_RETRIES = 3
@@ -40,7 +40,7 @@ class ExecutionResult(BaseModel):
     """Output dari ExecutionAgent."""
     action: str         # 'OPEN', 'SKIP', 'PENDING'
     reason: str
-    trade_id: Optional[int] = None  # ID dari paper_trades
+    trade_id: int | None = None  # ID dari paper_trades
 
 
 class ExecutionAgent(BaseAgent):
@@ -122,7 +122,7 @@ class ExecutionAgent(BaseAgent):
         reversal_result: ReversalResult,
         trend_result: TrendResult,
         confirmation_confirmed: bool
-    ) -> Optional[ExecutionResult]:
+    ) -> ExecutionResult | None:
         """
         Validasi signal sebelum eksekusi. Dipakai oleh paper dan live mode.
         Return ExecutionResult(SKIP) jika tidak valid, None jika valid.
@@ -186,7 +186,7 @@ class ExecutionAgent(BaseAgent):
                     size=risk_result.position_size,
                     leverage=risk_result.leverage,
                     status=status,
-                    entry_timestamp=datetime.now(timezone.utc),
+                    entry_timestamp=datetime.now(UTC),
                     execution_mode=get_current_mode(),
                 )
                 db.add(trade)
@@ -301,7 +301,7 @@ class ExecutionAgent(BaseAgent):
                 size=float(amount),
                 leverage=risk_result.leverage,
                 status='PENDING_SUBMIT',
-                entry_timestamp=datetime.now(timezone.utc),
+                entry_timestamp=datetime.now(UTC),
                 execution_mode=get_current_mode(),
                 exchange_order_id=None,  # Belum ada
             )
@@ -345,7 +345,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'FAILED'
                     db_trade.close_reason = 'EXCHANGE_ERROR'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             return ExecutionResult(action="SKIP", reason="Insufficient funds")
         except ccxt.InvalidOrder as e:
             self._log_error(f"Invalid order for trade {trade_id}: {e}")
@@ -354,7 +354,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'FAILED'
                     db_trade.close_reason = 'EXCHANGE_ERROR'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             return ExecutionResult(action="SKIP", reason=f"Invalid order: {str(e)}")
         except ccxt.NetworkError:
             self._log_error(f"Network error for trade {trade_id} — resetting exchange")
@@ -363,7 +363,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'FAILED'
                     db_trade.close_reason = 'EXCHANGE_ERROR'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             reset_exchange()
             return ExecutionResult(action="SKIP", reason="Network error, exchange reset")
         except ccxt.ExchangeError as e:
@@ -373,7 +373,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'FAILED'
                     db_trade.close_reason = 'EXCHANGE_ERROR'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             return ExecutionResult(action="SKIP", reason=f"Exchange error: {str(e)}")
         except Exception as e:
             self._log_error(f"Unexpected error for trade {trade_id}: {e}")
@@ -382,7 +382,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'FAILED'
                     db_trade.close_reason = 'EXCHANGE_ERROR'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             return self._handle_ccxt_error(e, "live limit execution")
 
         # ── Step 3: UPDATE ke PENDING_ENTRY — TERPISAH dari Step 2 ────────
@@ -510,7 +510,7 @@ class ExecutionAgent(BaseAgent):
                     size=filled_amount,
                     leverage=risk_result.leverage,
                     status='OPEN',
-                    entry_timestamp=datetime.now(timezone.utc),
+                    entry_timestamp=datetime.now(UTC),
                     execution_mode=get_current_mode(),
                     exchange_order_id=exchange_order_id,
                     sl_order_id=sl_order_id,
@@ -565,7 +565,7 @@ class ExecutionAgent(BaseAgent):
         Returns:
             List of dict dengan info aksi yang diambil per trade.
         """
-        results = []
+        results: list[dict] = []
 
         # Paper mode tidak punya pending Binance orders
         if settings.EXECUTION_MODE != "live":
@@ -628,7 +628,7 @@ class ExecutionAgent(BaseAgent):
                     if db_trade:
                         db_trade.status = 'EXPIRED'
                         db_trade.close_reason = 'EXPIRED'
-                        db_trade.close_timestamp = datetime.now(timezone.utc)
+                        db_trade.close_timestamp = datetime.now(UTC)
 
                 self._log(f"Order {trade_exchange_order_id} canceled/expired externally")
                 result["action"] = "expired"
@@ -638,8 +638,8 @@ class ExecutionAgent(BaseAgent):
                 entry_ts = trade['entry_timestamp']
                 # Handle naive datetime dari SQLite
                 if entry_ts.tzinfo is None:
-                    entry_ts = entry_ts.replace(tzinfo=timezone.utc)
-                hours_elapsed = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 3600
+                    entry_ts = entry_ts.replace(tzinfo=UTC)
+                hours_elapsed = (datetime.now(UTC) - entry_ts).total_seconds() / 3600
                 candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
                 candles_remaining = settings.ORDER_EXPIRY_CANDLES - candles_elapsed
 
@@ -661,7 +661,7 @@ class ExecutionAgent(BaseAgent):
                         if db_trade:
                             db_trade.status = 'EXPIRED'
                             db_trade.close_reason = 'EXPIRED'
-                            db_trade.close_timestamp = datetime.now(timezone.utc)
+                            db_trade.close_timestamp = datetime.now(UTC)
 
                     result["action"] = "expired"
                 else:
@@ -683,7 +683,7 @@ class ExecutionAgent(BaseAgent):
                 if db_trade:
                     db_trade.status = 'EXPIRED'
                     db_trade.close_reason = 'EXPIRED'
-                    db_trade.close_timestamp = datetime.now(timezone.utc)
+                    db_trade.close_timestamp = datetime.now(UTC)
             result["action"] = "expired"
 
         except Exception as e:

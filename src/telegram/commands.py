@@ -12,11 +12,10 @@ from dataclasses import dataclass, field
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
-from src.utils.kill_switch import create_kill_switch, remove_kill_switch, check_kill_switch
+from src.utils.kill_switch import check_kill_switch, create_kill_switch, remove_kill_switch
 from src.utils.logger import logger
 from src.utils.mode import get_current_mode, get_mode_label
 from src.utils.trade_utils import close_trade
-
 
 # ── Cleanup Result ──────────────────────────────────────────────────────────
 
@@ -71,7 +70,7 @@ def _cleanup_mode_trades(mode: str) -> CleanupResult:
             if mode == 'testnet':
                 # Cancel orders di Binance testnet
                 try:
-                    from src.utils.exchange import get_exchange, cancel_algo_order
+                    from src.utils.exchange import cancel_algo_order, get_exchange
                     exchange = get_exchange()
                     close_side = 'sell' if trade.side == 'LONG' else 'buy'
 

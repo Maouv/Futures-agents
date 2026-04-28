@@ -9,12 +9,16 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import argparse # noqa: E402
+import argparse  # noqa: E402
 
-from src.data.ohlcv_fetcher import fetch_and_store_ohlcv # noqa: E402
-from src.indicators.luxalgo_smc import detect_order_blocks, detect_fvg, detect_bos_choch # noqa: E402
-from src.indicators.mean_reversion import calculate_mean_reversion # noqa: E402
-from src.utils.logger import logger, setup_logger # noqa: E402
+from src.data.ohlcv_fetcher import fetch_and_store_ohlcv  # noqa: E402
+from src.indicators.luxalgo_smc import (  # noqa: E402
+    detect_bos_choch,
+    detect_fvg,
+    detect_order_blocks,
+)
+from src.indicators.mean_reversion import calculate_mean_reversion  # noqa: E402
+from src.utils.logger import logger, setup_logger  # noqa: E402
 
 
 def validate(symbol: str = "BTCUSDT", timeframe: str = "1h", bars: int = 100):

@@ -5,20 +5,16 @@ DILARANG menulis raw SQL string.
 """
 import shutil
 import time
-from datetime import datetime, timezone
-from typing import Generator
+from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import (
-    DateTime, Float, Integer, String, Text,
-    create_engine, Index, text, event
-)
+from sqlalchemy import DateTime, Float, Index, Integer, String, Text, create_engine, event, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from src.utils.logger import logger
-
 
 DATABASE_URL = "sqlite:///data/trading.db"
 
@@ -115,7 +111,7 @@ class TradeLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     level: Mapped[str] = mapped_column(String(10), nullable=False)         # 'INFO', 'WARNING', 'ERROR'
     source: Mapped[str] = mapped_column(String(50), nullable=False)        # Nama agent yang log
@@ -225,7 +221,7 @@ def backup_db() -> bool:
         return False
 
     # Create backup dengan timestamp
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     backup_path = backup_dir / f"trading_{timestamp}.db"
 
     try:
@@ -260,7 +256,7 @@ def cleanup_stranded_trades() -> int:
     from datetime import timedelta
 
     cleanup_count = 0
-    five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
+    five_min_ago = datetime.now(UTC) - timedelta(minutes=5)
 
     with get_session() as db:
         # PENDING_SUBMIT > 5 menit
@@ -272,7 +268,7 @@ def cleanup_stranded_trades() -> int:
         for trade in stranded_submit:
             trade.status = 'FAILED'
             trade.close_reason = 'EXCHANGE_TIMEOUT'
-            trade.close_timestamp = datetime.now(timezone.utc)
+            trade.close_timestamp = datetime.now(UTC)
             cleanup_count += 1
             logger.warning(f"Cleaned up stranded PENDING_SUBMIT: Trade {trade.id}")
 
@@ -285,7 +281,7 @@ def cleanup_stranded_trades() -> int:
         for trade in stranded_entry:
             trade.status = 'FAILED'
             trade.close_reason = 'NO_ORDER_ID'
-            trade.close_timestamp = datetime.now(timezone.utc)
+            trade.close_timestamp = datetime.now(UTC)
             cleanup_count += 1
             logger.warning(f"Cleaned up PENDING_ENTRY without order_id: Trade {trade.id}")
 

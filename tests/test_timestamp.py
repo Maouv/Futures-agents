@@ -3,9 +3,9 @@ test_timestamp.py — Unit tests untuk BUG #10 fix.
 Test bahwa setiap paper trade mendapat unique timestamp yang benar.
 """
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
-from src.data.storage import PaperTrade, init_db, get_session
+from src.data.storage import PaperTrade, get_session, init_db
 
 
 def test_unique_entry_timestamps():
@@ -31,7 +31,7 @@ def test_unique_entry_timestamps():
             size=0.05,
             leverage=10,
             status='OPEN',
-            entry_timestamp=datetime.now(timezone.utc)
+            entry_timestamp=datetime.now(UTC)
         )
         db.add(trade1)
         db.commit()
@@ -51,7 +51,7 @@ def test_unique_entry_timestamps():
             size=0.5,
             leverage=10,
             status='OPEN',
-            entry_timestamp=datetime.now(timezone.utc)
+            entry_timestamp=datetime.now(UTC)
         )
         db.add(trade2)
         db.commit()
@@ -72,7 +72,7 @@ def test_timestamp_is_recent():
     """
     init_db()
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
 
     with get_session() as db:
         trade = PaperTrade(
@@ -84,21 +84,21 @@ def test_timestamp_is_recent():
             size=0.05,
             leverage=10,
             status='OPEN',
-            entry_timestamp=datetime.now(timezone.utc)
+            entry_timestamp=datetime.now(UTC)
         )
         db.add(trade)
         db.commit()
         ts = trade.entry_timestamp
 
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     # SQLite strips timezone, so we need to make ts timezone-aware for comparison
-    ts_aware = ts.replace(tzinfo=timezone.utc)
+    ts_aware = ts.replace(tzinfo=UTC)
 
     # Timestamp harus di antara before dan after
     assert before <= ts_aware <= after, "Timestamp harus di antara waktu sebelum dan sesudah insert"
 
     # Dan harus dalam 1 detik dari sekarang
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     diff = (now - ts_aware).total_seconds()
     assert diff < 1.0, f"Timestamp terlalu tua: {diff} detik yang lalu"

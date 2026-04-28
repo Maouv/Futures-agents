@@ -2,12 +2,13 @@
 bot.py — Telegram bot interface.
 Router: pesan command → CommanderAgent, pesan chat → ConciergeAgent.
 """
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from src.config.settings import settings
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+
 from src.agents.llm.commander_agent import run_commander
 from src.agents.llm.concierge_agent import run_concierge
+from src.config.settings import settings
 from src.utils.logger import logger
+from telegram import Update
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -54,6 +55,7 @@ async def _execute_command(result) -> str:
 def _get_trade_context() -> str:
     """Ambil summary trades untuk context Concierge, dipisah per mode."""
     from sqlalchemy import func
+
     from src.data.storage import PaperTrade, get_session
     from src.telegram.commands import _get_mode_stats
 

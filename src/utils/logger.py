@@ -3,6 +3,7 @@ logger.py — Loguru setup terpusat.
 Semua modul WAJIB import logger dari sini. DILARANG pakai print().
 """
 import sys
+
 from loguru import logger
 
 

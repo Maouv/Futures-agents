@@ -5,7 +5,6 @@ HANYA untuk live/testnet mode. Paper mode SL/TP di-handle oleh sltp_manager.
 Trailing stop: step-based SL adjustment saat unrealized profit mencapai threshold.
 Liquidation price: estimasi harga likuidasi (simplified formula).
 """
-from typing import Dict, List
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
@@ -36,7 +35,7 @@ def calculate_liquidation_price(entry_price: float, side: str, leverage: int) ->
         raise ValueError(f"Invalid side: {side}")
 
 
-def check_trailing_stop(current_prices: Dict[str, Dict]) -> List[Dict]:
+def check_trailing_stop(current_prices: dict[str, dict]) -> list[dict]:
     """
     Cek semua OPEN live trades, apply trailing stop steps jika profit threshold tercapai.
 

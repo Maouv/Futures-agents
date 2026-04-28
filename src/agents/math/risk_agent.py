@@ -7,9 +7,9 @@ OB Midpoint Overlap Handling:
 - Jika harga sudah di LUAR OB zone → raise OverlapSkipError (trade di-skip)
 - Minimum SL buffer = 0.5 * ATR agar SL tidak terlalu dekat
 """
+
 import pandas as pd
 from pydantic import BaseModel
-from typing import Optional
 
 from src.agents.math.base_agent import BaseAgent
 from src.config.settings import settings
@@ -55,7 +55,7 @@ class RiskAgent(BaseAgent):
         signal: str,
         order_block: OrderBlock,
         df: pd.DataFrame,
-        current_price: Optional[float] = None,
+        current_price: float | None = None,
         atr_period: int = 14
     ) -> RiskResult:
         """

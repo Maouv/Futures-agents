@@ -2,10 +2,10 @@
 test_sltp_manager.py — Unit tests untuk SL/TP Manager.
 Fokus: Multi-pair error handling (BUG #5 fix).
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from src.agents.math.sltp_manager import check_paper_trades
-from src.data.storage import PaperTrade, init_db, get_session
+from src.data.storage import PaperTrade, get_session, init_db
 
 
 class TestSLTPManagerMultiPair:
@@ -36,7 +36,7 @@ class TestSLTPManagerMultiPair:
                 size=0.05,
                 leverage=10,
                 status='OPEN',
-                entry_timestamp=datetime.now(timezone.utc)
+                entry_timestamp=datetime.now(UTC)
             )
             # Trade ETHUSDT - TIDAK ada di price dict
             trade2 = PaperTrade(
@@ -48,7 +48,7 @@ class TestSLTPManagerMultiPair:
                 size=0.5,
                 leverage=10,
                 status='OPEN',
-                entry_timestamp=datetime.now(timezone.utc)
+                entry_timestamp=datetime.now(UTC)
             )
             db.add(trade1)
             db.add(trade2)
@@ -81,7 +81,7 @@ class TestSLTPManagerMultiPair:
                 size=0.05,
                 leverage=10,
                 status='OPEN',
-                entry_timestamp=datetime.now(timezone.utc)
+                entry_timestamp=datetime.now(UTC)
             )
             trade2 = PaperTrade(
                 pair='ETHUSDT',
@@ -92,7 +92,7 @@ class TestSLTPManagerMultiPair:
                 size=0.5,
                 leverage=10,
                 status='OPEN',
-                entry_timestamp=datetime.now(timezone.utc)
+                entry_timestamp=datetime.now(UTC)
             )
             db.add(trade1)
             db.add(trade2)
@@ -128,7 +128,7 @@ class TestSLTPManagerMultiPair:
                 size=100.0,
                 leverage=10,
                 status='OPEN',
-                entry_timestamp=datetime.now(timezone.utc)
+                entry_timestamp=datetime.now(UTC)
             )
             db.add(trade)
             db.commit()

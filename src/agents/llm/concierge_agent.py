@@ -6,6 +6,7 @@ ATURAN KHUSUS Concierge (WAJIB DIPATUHI):
 - Model, API key, dan base URL dikonfigurasi via .env
 """
 import openai
+
 from src.config.settings import settings
 from src.utils.logger import logger
 

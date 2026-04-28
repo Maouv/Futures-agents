@@ -12,16 +12,14 @@ Features:
 - reset_exchange() untuk force recreate saat connection error
 """
 import threading
-from typing import Optional
 
 import ccxt
 
 from src.config.settings import settings
 from src.utils.logger import logger
 
-
 # ── Singleton State ─────────────────────────────────────────────────────────
-_exchange_instance: Optional[ccxt.binanceusdm] = None
+_exchange_instance: ccxt.binanceusdm | None = None
 _exchange_lock = threading.Lock()
 
 
@@ -142,9 +140,9 @@ def place_algo_order(
     Raises:
         ccxt.ExchangeError: Jika order gagal
     """
-    import time
     import hashlib
     import hmac
+    import time
     import urllib.parse
 
     exchange = get_exchange()
@@ -206,9 +204,9 @@ def cancel_algo_order(
     Returns:
         dict response dari Binance API
     """
-    import time
     import hashlib
     import hmac
+    import time
     import urllib.parse
 
     exchange = get_exchange()
@@ -263,9 +261,9 @@ def get_open_algo_orders(symbol: str) -> list:
     Returns:
         List of dict, masing-masing berisi setidaknya 'algoId' dan 'type'
     """
-    import time
     import hashlib
     import hmac
+    import time
     import urllib.parse
 
     exchange = get_exchange()

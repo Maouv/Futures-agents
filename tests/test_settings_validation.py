@@ -6,9 +6,10 @@ Note: EXECUTION_MODE and USE_TESTNET are @property (read from config.json).
 Tests inject config via config_loader.set_config_override() instead of constructor args.
 """
 import pytest
-from pydantic import ValidationError, SecretStr
+from pydantic import SecretStr, ValidationError
+
+from src.config.config_loader import reload_config, set_config_override
 from src.config.settings import Settings
-from src.config.config_loader import set_config_override, reload_config
 
 
 def _make_config(execution_mode='paper', use_testnet=False):

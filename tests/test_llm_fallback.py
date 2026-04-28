@@ -1,7 +1,10 @@
 # tests/test_llm_fallback.py
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from src.agents.llm.analyst_agent import run_analyst, AnalystDecision
+
+from src.agents.llm.analyst_agent import AnalystDecision, run_analyst
+
 
 @pytest.fixture
 def inputs():

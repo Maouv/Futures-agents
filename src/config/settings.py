@@ -7,9 +7,9 @@ to config.json secrets section (for ${ENV_VAR} interpolation).
 
 All existing `settings.XXX` access patterns work unchanged.
 """
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -21,19 +21,19 @@ class Settings(BaseSettings):
     )
 
     # ── Binance Secrets (from .env only) ─────────────────────────────────────
-    BINANCE_API_KEY: Optional[SecretStr] = Field(None, description="Binance Futures API Key")
-    BINANCE_API_SECRET: Optional[SecretStr] = Field(None, description="Binance Futures API Secret")
-    BINANCE_TESTNET_KEY: Optional[SecretStr] = Field(None, description="Binance Testnet API Key")
-    BINANCE_TESTNET_SECRET: Optional[SecretStr] = Field(None, description="Binance Testnet API Secret")
+    BINANCE_API_KEY: SecretStr | None = Field(None, description="Binance Futures API Key")
+    BINANCE_API_SECRET: SecretStr | None = Field(None, description="Binance Futures API Secret")
+    BINANCE_TESTNET_KEY: SecretStr | None = Field(None, description="Binance Testnet API Key")
+    BINANCE_TESTNET_SECRET: SecretStr | None = Field(None, description="Binance Testnet API Secret")
 
     # ── Telegram Secret (from .env only) ─────────────────────────────────────
     TELEGRAM_BOT_TOKEN: SecretStr = Field(..., description="Telegram Bot Token")
 
     # ── LLM API Keys (from .env, fallback to config.json secrets) ────────────
-    CEREBRAS_API_KEY: Optional[SecretStr] = Field(None, description="Cerebras API Key")
-    GROQ_API_KEY: Optional[SecretStr] = Field(None, description="Groq API Key")
-    CONCIERGE_API_KEY: Optional[SecretStr] = Field(None, description="Concierge API Key")
-    FALLBACK_API_KEY: Optional[SecretStr] = Field(None, description="Fallback LLM API Key")
+    CEREBRAS_API_KEY: SecretStr | None = Field(None, description="Cerebras API Key")
+    GROQ_API_KEY: SecretStr | None = Field(None, description="Groq API Key")
+    CONCIERGE_API_KEY: SecretStr | None = Field(None, description="Concierge API Key")
+    FALLBACK_API_KEY: SecretStr | None = Field(None, description="Fallback LLM API Key")
 
     @field_validator('BINANCE_API_KEY', 'BINANCE_API_SECRET')
     @classmethod
@@ -301,7 +301,7 @@ class Settings(BaseSettings):
         from src.config.config_loader import load_llm_config
         return load_llm_config().get('analyst_providers', [])
 
-    def get_secret_by_key(self, key: str) -> Optional[str]:
+    def get_secret_by_key(self, key: str) -> str | None:
         """Resolve a config.json api_key_env name to the actual secret value."""
         mapping = {
             'cerebras_api_key': self.CEREBRAS_API_KEY,

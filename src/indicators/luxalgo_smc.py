@@ -21,7 +21,6 @@ from pydantic import BaseModel
 
 from src.indicators._smc_core import smc as _smc
 
-
 # ── Pydantic Output Models (tidak berubah dari Phase 2) ─────────────────────
 
 class OrderBlock(BaseModel):

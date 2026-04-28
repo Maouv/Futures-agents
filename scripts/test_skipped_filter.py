@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.backtest.metrics import TradeResult, calculate_metrics
 
+
 def test_skipped_trades_excluded():
     """Test bahwa SKIPPED trades tidak dihitung di metrics."""
     print("=" * 60)

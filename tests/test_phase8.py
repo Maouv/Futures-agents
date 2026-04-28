@@ -16,14 +16,18 @@ class TestKillSwitch:
     def test_create_and_check(self, tmp_path):
         path = str(tmp_path / "kill_switch")
         with patch('src.utils.kill_switch.KILL_SWITCH_PATH', path):
-            from src.utils.kill_switch import create_kill_switch, check_kill_switch
+            from src.utils.kill_switch import check_kill_switch, create_kill_switch
             create_kill_switch()
             assert check_kill_switch() is True
 
     def test_remove(self, tmp_path):
         path = str(tmp_path / "kill_switch")
         with patch('src.utils.kill_switch.KILL_SWITCH_PATH', path):
-            from src.utils.kill_switch import create_kill_switch, remove_kill_switch, check_kill_switch
+            from src.utils.kill_switch import (
+                check_kill_switch,
+                create_kill_switch,
+                remove_kill_switch,
+            )
             create_kill_switch()
             assert check_kill_switch() is True
             remove_kill_switch()
@@ -174,8 +178,9 @@ class TestWSOrderParsing:
 class TestDBMigration:
     def test_migrate_adds_columns(self, tmp_path):
         """migrate_db() should add new columns to existing tables."""
-        from src.data.storage import migrate_db
         from sqlalchemy import create_engine, inspect
+
+        from src.data.storage import migrate_db
 
         db_path = str(tmp_path / "test_trading.db")
         test_engine = create_engine(f"sqlite:///{db_path}")

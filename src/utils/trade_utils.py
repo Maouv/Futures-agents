@@ -1,6 +1,6 @@
 """Centralized trade calculations and DB update helpers."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def calculate_pnl(side: str, entry_price: float, close_price: float, size: float) -> float:
@@ -15,7 +15,7 @@ def close_trade(trade, close_reason: str, close_price: float | None = None,
     """Close a PaperTrade in DB. Sets status, reason, timestamp, and optionally price/pnl."""
     trade.status = 'CLOSED'
     trade.close_reason = close_reason
-    trade.close_timestamp = datetime.now(timezone.utc)
+    trade.close_timestamp = datetime.now(UTC)
     if close_price is not None:
         trade.close_price = close_price
     if pnl is not None:

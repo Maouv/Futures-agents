@@ -1,7 +1,7 @@
 """
 metrics.py — Calculate backtest performance metrics.
 """
-from typing import List
+
 from pydantic import BaseModel
 
 
@@ -44,7 +44,7 @@ class BacktestMetrics(BaseModel):
     largest_loss: float      # USDT
 
 
-def calculate_metrics(trades: List[TradeResult], initial_balance: float = 10_000.0) -> BacktestMetrics:
+def calculate_metrics(trades: list[TradeResult], initial_balance: float = 10_000.0) -> BacktestMetrics:
     """
     Calculate performance metrics from list of trades.
     SKIPPED trades are excluded from metrics calculation.

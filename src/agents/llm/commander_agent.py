@@ -3,9 +3,11 @@ commander_agent.py — Menerjemahkan perintah Telegram user ke fungsi Python.
 Input: string pesan user
 Output: CommanderResult dengan function_name yang bisa dieksekusi
 """
-from pydantic import BaseModel
 import json
+
 import openai
+from pydantic import BaseModel
+
 from src.config.settings import settings
 from src.utils.logger import logger
 

@@ -10,12 +10,11 @@ Test matrix:
 4. Concurrent 4 calls — kemungkinan besar kena 429
 """
 import asyncio
-import time
 import json
+import time
 from datetime import datetime
 
 from src.config.settings import settings
-
 
 # ── Helper ──────────────────────────────────────────────────────────────────
 

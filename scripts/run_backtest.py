@@ -8,14 +8,14 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
-from typing import List
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from loguru import logger
+
 from src.backtest.engine import BacktestEngine
-from src.backtest.metrics import calculate_metrics, TradeResult
+from src.backtest.metrics import TradeResult, calculate_metrics
 
 
 def main():
@@ -87,7 +87,6 @@ def main():
         default='BTCUSDT',
         help='Trading pairs comma-separated (default: BTCUSDT). Example: BTCUSDT,ETHUSDT,SOLUSDT'
     )
-    
     args = parser.parse_args()
 
     # Parse pairs
@@ -101,7 +100,7 @@ def main():
     project_root = Path(__file__).parent.parent
 
     # Collect all trades from all pairs
-    all_trades: List[TradeResult] = []
+    all_trades: list[TradeResult] = []
 
     # Run backtest for each pair sequentially
     for pair in pairs:

@@ -2,7 +2,7 @@
 helpers.py — Fungsi utility untuk kalkulasi indikator.
 Semua fungsi WAJIB pure Python/pandas — DILARANG pakai LLM.
 """
-from typing import Union
+
 import pandas as pd
 
 
@@ -69,7 +69,7 @@ def find_swing_lows(df: pd.DataFrame, size: int = 5) -> pd.Series:
     return is_swing_low
 
 
-def crossover(series: pd.Series, level: Union[pd.Series, float]) -> pd.Series:
+def crossover(series: pd.Series, level: pd.Series | float) -> pd.Series:
     """True pada bar dimana series naik melewati level."""
     if isinstance(level, (int, float)):
         prev_below = series.shift(1) <= level
@@ -80,7 +80,7 @@ def crossover(series: pd.Series, level: Union[pd.Series, float]) -> pd.Series:
     return prev_below & curr_above
 
 
-def crossunder(series: pd.Series, level: Union[pd.Series, float]) -> pd.Series:
+def crossunder(series: pd.Series, level: pd.Series | float) -> pd.Series:
     """True pada bar dimana series turun melewati level."""
     if isinstance(level, (int, float)):
         prev_above = series.shift(1) >= level

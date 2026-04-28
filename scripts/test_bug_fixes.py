@@ -4,14 +4,17 @@ Manual integration test untuk verifikasi BUG #3 dan BUG #5 fixes.
 Run: python test_bug_fixes.py
 """
 import sys
+
 sys.path.insert(0, '/root/futures-agents')
 
-from src.agents.math.risk_agent import RiskAgent
-from src.indicators.luxalgo_smc import OrderBlock
-from src.agents.math.sltp_manager import check_paper_trades
-from src.data.storage import PaperTrade, init_db, get_session
-import pandas as pd
 import numpy as np
+import pandas as pd
+
+from src.agents.math.risk_agent import RiskAgent
+from src.agents.math.sltp_manager import check_paper_trades
+from src.data.storage import PaperTrade, get_session, init_db
+from src.indicators.luxalgo_smc import OrderBlock
+
 
 def test_bug3_position_size():
     """Test BUG #3: Formula position size sudah benar."""

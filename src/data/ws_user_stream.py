@@ -19,7 +19,7 @@ import asyncio
 import json
 import threading
 import time
-from typing import Optional, Callable
+from collections.abc import Callable
 
 import websockets
 
@@ -27,7 +27,6 @@ from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, get_ws_base_url, reset_exchange
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
-
 
 # ── Constants ──────────────────────────────────────────────────────────────
 KEEPALIVE_INTERVAL_SEC = 30 * 60   # 30 menit (Binance listen key expires 60 menit)
@@ -45,13 +44,13 @@ class UserDataStream:
         stream.stop()    # Stop gracefully
     """
 
-    def __init__(self, notification_callback: Optional[Callable] = None):
+    def __init__(self, notification_callback: Callable | None = None):
         """
         Args:
             notification_callback: Optional callable untuk Telegram notification.
                                    Dipanggil dengan dict: {'event': str, 'trade_id': int, ...}
         """
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._notification_callback = notification_callback
         self._last_message_time = 0.0
@@ -336,7 +335,7 @@ class UserDataStream:
         Tidak bergantung pada kecocokan ID — lebih robust dari cancel by algoId.
         """
         try:
-            from src.utils.exchange import get_open_algo_orders, cancel_algo_order
+            from src.utils.exchange import cancel_algo_order, get_open_algo_orders
 
             # SL hit → cancel TAKE_PROFIT_MARKET yang tersisa
             # TP hit → cancel STOP_MARKET yang tersisa

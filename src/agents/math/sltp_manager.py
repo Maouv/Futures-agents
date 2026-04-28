@@ -6,8 +6,7 @@ Exit detection menggunakan candle HIGH/LOW (bukan close) untuk menghindari
 look-ahead bias. Di Binance real, stop_market trigger berdasarkan high/low,
 bukan close — jadi paper mode harus mensimulasikan hal yang sama.
 """
-from datetime import datetime, timezone
-from typing import Dict, List
+from datetime import UTC, datetime
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
@@ -15,7 +14,7 @@ from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 
-def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
+def check_paper_trades(current_prices: dict[str, dict]) -> list[dict]:
     """
     Cek semua paper trade OPEN terhadap harga high/low/close 15m terbaru.
 
@@ -34,7 +33,7 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
         logger.debug("Live mode — SL/TP managed by Binance, skipping paper SLTP check")
         return []
 
-    closed = []
+    closed: list[dict] = []
 
     with get_session() as db:
         open_trades = db.query(PaperTrade).filter(
@@ -113,7 +112,7 @@ def check_paper_trades(current_prices: Dict[str, Dict]) -> List[Dict]:
     return closed
 
 
-def check_paper_pending(current_prices: Dict[str, Dict]) -> List[Dict]:
+def check_paper_pending(current_prices: dict[str, dict]) -> list[dict]:
     """
     Cek PENDING_ENTRY paper trades — apakah sudah 'filled' atau expired.
     Paper mode simulation untuk limit order fills (State 1/2).
@@ -133,7 +132,7 @@ def check_paper_pending(current_prices: Dict[str, Dict]) -> List[Dict]:
     if settings.EXECUTION_MODE == "live":
         return []
 
-    results = []
+    results: list[dict] = []
 
     with get_session() as db:
         pending_trades = db.query(PaperTrade).filter(
@@ -189,8 +188,8 @@ def check_paper_pending(current_prices: Dict[str, Dict]) -> List[Dict]:
             if trade.entry_timestamp:
                 entry_ts = trade.entry_timestamp
                 if entry_ts.tzinfo is None:
-                    entry_ts = entry_ts.replace(tzinfo=timezone.utc)
-                hours_elapsed = (datetime.now(timezone.utc) - entry_ts).total_seconds() / 3600
+                    entry_ts = entry_ts.replace(tzinfo=UTC)
+                hours_elapsed = (datetime.now(UTC) - entry_ts).total_seconds() / 3600
                 candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
 
                 if candles_elapsed >= settings.ORDER_EXPIRY_CANDLES:
@@ -200,7 +199,7 @@ def check_paper_pending(current_prices: Dict[str, Dict]) -> List[Dict]:
 
                     trade.status = 'EXPIRED'
                     trade.close_reason = 'EXPIRED'
-                    trade.close_timestamp = datetime.now(timezone.utc)
+                    trade.close_timestamp = datetime.now(UTC)
                     results.append({
                         'trade_id': trade.id,
                         'pair': trade.pair,

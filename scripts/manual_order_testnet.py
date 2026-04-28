@@ -20,13 +20,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config.settings import settings # noqa: E402
-from src.config.config_loader import load_trading_config # noqa: E402
-from src.data.ohlcv_fetcher import fetch_ohlcv # noqa: E402
-from src.agents.math.trend_agent import TrendAgent # noqa: E402
-from src.indicators.helpers import calculate_atr # noqa: E402
-from src.utils.exchange import get_exchange, reset_exchange, place_algo_order # noqa: E402
-from src.utils.logger import logger # noqa: E402
+from src.agents.math.trend_agent import TrendAgent  # noqa: E402
+from src.config.config_loader import load_trading_config  # noqa: E402
+from src.config.settings import settings  # noqa: E402
+from src.data.ohlcv_fetcher import fetch_ohlcv  # noqa: E402
+from src.indicators.helpers import calculate_atr  # noqa: E402
+from src.utils.exchange import get_exchange, place_algo_order, reset_exchange  # noqa: E402
+from src.utils.logger import logger  # noqa: E402
 
 
 def force_testnet() -> None:

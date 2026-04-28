@@ -7,18 +7,16 @@ SAFETY RULES (WAJIB ADA):
 - Semua request dibungkus rate_limiter (FR-1.1)
 - Gunakan ccxt.binanceusdm() BUKAN ccxt.binance() (CLAUDE.md Rule 1)
 """
-import ccxt
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
+import ccxt
 import pandas as pd
 
-from src.data.storage import OHLCVCandle15m, OHLCVCandleH1, OHLCVCandleH4, get_session
 from src.config.settings import settings
+from src.data.storage import OHLCVCandle15m, OHLCVCandleH1, OHLCVCandleH4, get_session
+from src.utils.exchange import get_exchange
 from src.utils.logger import logger
 from src.utils.rate_limiter import binance_limiter
-from src.utils.exchange import get_exchange
-
 
 # ── Session Windows (UTC) ────────────────────────────────────────────────────
 LONDON_OPEN_UTC = (7, 0)    # 07:00 UTC
@@ -216,7 +214,7 @@ def _fetch_raw_ohlcv(exchange: ccxt.binanceusdm, symbol: str, timeframe: str, li
     return result
 
 
-def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> pd.DataFrame | None:
     """
     Fetch OHLCV dari Binance Futures, simpan ke DB, return sebagai DataFrame.
 
@@ -314,7 +312,7 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
         df.attrs['skip_trade'] = False
         logger.debug("Session filter DISABLED by config (DISABLE_SESSION_FILTER=True)")
     else:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         skip_trade = not is_trading_session(now_utc)
         df.attrs['skip_trade'] = skip_trade
         if skip_trade:
@@ -326,7 +324,7 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]
     return df
 
 
-def fetch_ohlcv(symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
+def fetch_ohlcv(symbol: str, timeframe: str) -> pd.DataFrame | None:
     """
     Fetch OHLCV dari Binance Futures via ccxt REST.
     Return None jika gap terdeteksi atau error.

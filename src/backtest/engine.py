@@ -9,17 +9,16 @@ FIXES v2:
 - Bug #3: Exit check pakai high/low candle, bukan close (mencegah look-ahead bias)
 """
 import os
-from typing import List, Optional
+
 import pandas as pd
 from loguru import logger
 
-from src.agents.math.trend_agent import TrendAgent
-from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.confirmation_agent import ConfirmationAgent
-from src.indicators.helpers import calculate_atr
+from src.agents.math.reversal_agent import ReversalAgent
+from src.agents.math.trend_agent import TrendAgent
+from src.backtest.metrics import BacktestMetrics, TradeResult, calculate_metrics
 from src.config.settings import settings
-from src.backtest.metrics import TradeResult, BacktestMetrics, calculate_metrics
-
+from src.indicators.helpers import calculate_atr
 
 # ── Konstanta strategi (sesuai settings.py) ─────────────────────────────────
 RISK_PER_TRADE_USD = settings.RISK_PER_TRADE_USD  # Fixed risk per trade (from .env)
@@ -50,7 +49,7 @@ class BacktestEngine:
         self,
         h4_csv_path: str,
         h1_csv_path: str,
-        m15_csv_path: Optional[str] = None,
+        m15_csv_path: str | None = None,
         initial_balance: float = 10.,
         risk_per_trade: float = 0.01,
         fee_rate: float = 0.0005,
@@ -74,7 +73,7 @@ class BacktestEngine:
         self.reversal_agent     = ReversalAgent()
         self.confirmation_agent = ConfirmationAgent()
 
-        self.trades: List[TradeResult] = []
+        self.trades: list[TradeResult] = []
 
     # ── Data loading ─────────────────────────────────────────────────────────
 
@@ -100,7 +99,7 @@ class BacktestEngine:
 
     # ── Main backtest loop ───────────────────────────────────────────────────
 
-    def run(self, year: Optional[int] = None, month: Optional[int] = None) -> BacktestMetrics:
+    def run(self, year: int | None = None, month: int | None = None) -> BacktestMetrics:
         logger.info("Starting backtest...")
 
         df_h4  = self.load_csv(self.h4_csv_path)
@@ -333,7 +332,7 @@ class BacktestEngine:
         current_close: float,
         current_time: int,
         i: int,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         FIX Bug #3: Cek exit menggunakan HIGH/LOW candle, bukan close price.
         Ini lebih realistis — SL/TP bisa kena di tengah candle.

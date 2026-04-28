@@ -2,7 +2,9 @@
 base_agent.py — Abstract base class untuk semua Math Agents.
 """
 from abc import ABC, abstractmethod
+
 from pydantic import BaseModel
+
 from src.utils.logger import logger
 
 

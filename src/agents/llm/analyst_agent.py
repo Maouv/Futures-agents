@@ -3,18 +3,19 @@ analyst_agent.py — LLM Analyst dengan provider chain.
 Providers diiterate: primary → fallback → ... → rule-based.
 Config driven dari config.json llm.analyst_providers list.
 """
-from pydantic import BaseModel
-from typing import Optional
 import json
-import time
 import threading
+import time
+
 import openai
-from src.config.settings import settings
-from src.agents.math.trend_agent import TrendResult
-from src.agents.math.reversal_agent import ReversalResult
+from pydantic import BaseModel
+
 from src.agents.math.confirmation_agent import ConfirmationResult
-from src.utils.logger import logger
+from src.agents.math.reversal_agent import ReversalResult
+from src.agents.math.trend_agent import TrendResult
+from src.config.settings import settings
 from src.utils.llm_rate_limiter import get_provider_limiter
+from src.utils.logger import logger
 
 
 class AnalystDecision(BaseModel):
@@ -30,7 +31,7 @@ _client_cache: dict[str, openai.OpenAI] = {}
 _client_lock = threading.Lock()
 
 
-def _get_client(provider: dict) -> Optional[openai.OpenAI]:
+def _get_client(provider: dict) -> openai.OpenAI | None:
     """Get or create cached OpenAI client for a provider. Returns None if misconfigured."""
     name = provider['name']
     api_key = settings.get_secret_by_key(provider.get('api_key_env', ''))
@@ -90,7 +91,7 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
-def _call_provider(provider: dict, prompt: str) -> Optional[AnalystDecision]:
+def _call_provider(provider: dict, prompt: str) -> AnalystDecision | None:
     """
     Call a single provider with retry + rate limiting.
     Returns AnalystDecision on success, None on failure (so chain can continue).

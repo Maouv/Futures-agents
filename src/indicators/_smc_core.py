@@ -1,8 +1,10 @@
-from functools import wraps
-import pandas as pd
-import numpy as np
-from pandas import DataFrame, Series
 from datetime import datetime
+from functools import wraps
+
+import numpy as np
+import pandas as pd
+from pandas import DataFrame, Series
+
 
 def inputvalidator(input_="ohlc"):
     def dfcheck(func):
@@ -590,7 +592,6 @@ class smc:
         # Work on a copy so the original is not modified.
         shl = swing_highs_lows.copy()
         n = len(ohlc)
-        
         # Calculate the pip range based on the overall high-low range.
         pip_range = (ohlc["high"].max() - ohlc["low"].min()) * range_percent
 
@@ -788,7 +789,6 @@ class smc:
             pd.Series(broken_high, name="BrokenHigh"),
             pd.Series(broken_low, name="BrokenLow"),
         ], axis=1)
-    
     @classmethod
     def sessions(
         cls,

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run ReversalAgent for a single pair and print detailed results."""
 import sys
+
 sys.path.insert(0, "/root/futures-agents")
 
-from src.data.ohlcv_fetcher import fetch_ohlcv
 from src.agents.math.reversal_agent import ReversalAgent
+from src.data.ohlcv_fetcher import fetch_ohlcv
 
 PAIR = "ETHUSDT"
 TIMEFRAME = "1h"

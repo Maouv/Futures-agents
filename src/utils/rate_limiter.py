@@ -6,7 +6,8 @@ Thread-safe menggunakan threading.Condition untuk mencegah race condition.
 import threading
 import time
 from collections import deque
-from typing import Callable, TypeVar, Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from src.utils.logger import logger
 
