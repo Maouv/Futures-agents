@@ -1,0 +1,43 @@
+# ==========================================
+# CORE TRADING & DATA ENGINE
+# ==========================================
+ccxt==4.2.86              # Universal crypto API (Mendukung binanceusdm() REST)
+pandas==3.0.2             # Manipulasi data OHLCV & Indikator
+numpy==2.2.6              # Komputasi matematika cepat (Vectorization) — pinned for pandas 3.0 compat
+ta==0.11.0                # Library Technical Analysis standar (RSI, ATR, dll)
+pandas-ta==0.4.71b0       # Tambahan indikator (porting LuxAlgo SMC)
+
+# ==========================================
+# DATABASE & ORM
+# ==========================================
+sqlalchemy==2.0.31        # ORM untuk mengelola SQLite (Paper Trade DB)
+aiosqlite==0.20.0         # Driver async SQLite (Dibutuhkan oleh Telegram Bot agar tidak blocking)
+
+# ==========================================
+# SCHEDULING & INFRASTRUCTURE
+# ==========================================
+apscheduler==3.10.4       # Job scheduler utama (Loop 15 menit)
+loguru==0.7.2             # Logging yang jauh lebih baik dari print() atau logging bawaan
+
+# ==========================================
+# TELEGRAM INTERFACE
+# ==========================================
+python-telegram-bot==21.5 # Framework Telegram Bot (Async, stabil, mendukung handler kompleks)
+
+# ==========================================
+# LLM API CLIENTS (COGNITIVE LAYER)
+# ==========================================
+openai==1.40.0            # Universal SDK (Cerebras + Groq, kompatibel OpenAI standard)
+
+# ==========================================
+# CONFIGURATION & VALIDATION
+# ==========================================
+pydantic==2.8.2           # Validasi data (Pydantic Models untuk antar Agent)
+pydantic-settings==2.3.4  # Mengambil & memvalidasi variabel dari file .env
+python-dotenv==1.0.1      # Loader file .env
+
+# ==========================================
+# NETWORKING (ON-CHAIN & FALLBACK)
+# ==========================================
+httpx==0.27.0             # HTTP Client modern (Untuk fetch DefiLlama / On-chain data)
+websockets==12.0          # Library WS murni Python (Phase 8: User Data Stream)

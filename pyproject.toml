@@ -1,0 +1,104 @@
+# pyproject.toml — Konfigurasi terpusat untuk semua dev tools
+# Standar modern Python (PEP 517/518). Menggantikan setup.cfg, .flake8, mypy.ini, pytest.ini.
+# Semua tool baca dari sini — tidak perlu config file terpisah.
+
+# ──────────────────────────────────────────────────────────────
+# PROJECT METADATA
+# ──────────────────────────────────────────────────────────────
+[project]
+name = "futures-agents"
+version = "0.1.0"
+description = "AI-powered Binance Futures trading bot dengan multi-agent architecture"
+requires-python = ">=3.12"
+
+
+# ──────────────────────────────────────────────────────────────
+# RUFF — Linter + Formatter (pengganti flake8, isort, pycodestyle)
+# ──────────────────────────────────────────────────────────────
+[tool.ruff]
+# Panjang maksimal satu baris kode.
+# 100 lebih realistis dari default 79 untuk codebase modern.
+line-length = 100
+
+# Python version target — ruff pakai ini untuk tahu syntax apa yang valid.
+target-version = "py312"
+
+# Folder yang di-exclude dari linting sama sekali.
+exclude = [
+    "examples/",
+    "scripts/smc_analysis.py",  # Intentional F841, sudah diketahui
+]
+
+[tool.ruff.lint]
+# Rule set yang diaktifkan:
+#   E = pycodestyle errors (spacing, indentation)
+#   F = pyflakes (unused imports, undefined names) — ini yang catch bug seperti F821
+#   W = pycodestyle warnings
+#   I = isort (urutan import)
+#   N = pep8-naming (konvensi nama class, function, variable)
+#   UP = pyupgrade (modernisasi syntax Python — List→list, Optional[X]→X|None, dll)
+select = ["E", "F", "W", "I", "N", "UP"]
+
+# Rule yang sengaja di-ignore:
+#   E501 = line too long — sudah di-handle oleh line-length di atas
+#   N806 = variable in function should be lowercase — false positive untuk konstanta lokal
+ignore = ["E501", "N806"]
+
+# Rule yang boleh di-fix otomatis oleh `ruff check --fix`
+fixable = ["F401", "F541", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files: boleh unused imports dan unused variables
+# karena pytest fixtures dan mock objects sering "tidak dipakai" secara eksplisit
+"tests/*" = ["F401", "F811", "F841"]
+"scripts/test_*.py" = ["F401", "F841"]
+
+# settings.py pakai @property dengan nama SCREAMING_CASE (misal: settings.EXECUTION_MODE)
+# supaya callsite bisa akses seperti konstanta. Ini intentional — bukan pelanggaran.
+"src/config/settings.py" = ["N802"]
+
+# _smc_core.py adalah port dari library third-party (LuxAlgo SMC).
+# Class name `smc` dan style issues tertentu adalah upstream convention — jangan diubah.
+"src/indicators/_smc_core.py" = ["N801", "N802", "UP030", "UP032"]
+
+
+# ──────────────────────────────────────────────────────────────
+# MYPY — Static type checker
+# ──────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+
+# Wajibkan semua function publik punya type annotations.
+# Ini yang akan catch masalah seperti "np undefined" sebelum runtime.
+disallow_untyped_defs = false
+
+# Warning kalau ada function yang return Any secara implisit.
+warn_return_any = false
+
+# Warning kalau ada ignore comment yang tidak diperlukan.
+warn_unused_ignores = true
+
+# Suppress error untuk third-party library yang tidak punya type stubs
+# (ccxt, pandas-ta, apscheduler tidak punya stubs lengkap)
+ignore_missing_imports = true
+
+# Folder yang di-skip mypy
+exclude = ["examples/", "scripts/test_"]
+
+
+# ──────────────────────────────────────────────────────────────
+# PYTEST — Test runner
+# ──────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+# Folder di mana pytest cari test files
+testpaths = ["tests"]
+
+# Default flags setiap `pytest` dijalankan:
+#   -v         = verbose, tampilkan nama test satu per satu
+#   --tb=short = traceback ringkas, tidak full stack trace
+addopts = "-v --tb=short"
+
+# Pattern file test yang dikenali pytest
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

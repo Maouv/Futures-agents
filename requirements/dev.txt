@@ -1,0 +1,23 @@
+# ==========================================
+# DEV DEPENDENCIES
+# Hanya untuk local development — JANGAN install di VPS
+# Install dengan: pip install -r requirements/dev.txt
+# ==========================================
+
+# Extends base — install semua runtime deps sekaligus
+-r base.txt
+
+# ==========================================
+# LINTING & FORMATTING
+# ==========================================
+ruff==0.15.12             # Linter + formatter (pengganti flake8, isort, pycodestyle)
+
+# ==========================================
+# TYPE CHECKING
+# ==========================================
+mypy==1.20.2              # Static type checker — catch type bugs sebelum runtime
+
+# ==========================================
+# TESTING
+# ==========================================
+pytest==8.2.2             # Framework unit test
