@@ -25,7 +25,7 @@ def inputvalidator(input_="ohlc"):
                 kwargs["column"] = inputs["c"]
 
             for col in input_:
-                if inputs[col] not in args[col].columns:
+                if inputs[col] not in args[i].columns:
                     raise LookupError(
                         'Must have a dataframe column named "{0}"'.format(inputs[col])
                     )

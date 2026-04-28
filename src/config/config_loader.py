@@ -253,6 +253,9 @@ def load_llm_config() -> Dict:
         provider_config = llm.get(provider, {})
         merged = {**defaults, **provider_config}
         result[provider] = _coerce_config(merged, defaults)
+    # Pass-through analyst_providers as-is (list of dicts, no coercion needed)
+    if 'analyst_providers' in llm:
+        result['analyst_providers'] = llm['analyst_providers']
     return result
 
 
@@ -261,3 +264,4 @@ def load_secrets_config() -> Dict:
     data = _load_config()
     secrets = data.get("secrets", {})
     return {**DEFAULT_SECRETS, **secrets}
+
