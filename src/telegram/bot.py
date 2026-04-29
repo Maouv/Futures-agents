@@ -10,6 +10,7 @@ from src.config.settings import settings
 from src.utils.logger import logger
 from telegram import Update
 
+
 # Ini dap
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route pesan ke Commander atau Concierge."""
