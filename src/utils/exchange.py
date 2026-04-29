@@ -31,7 +31,7 @@ def _create_exchange() -> ccxt.binanceusdm:
     recvWindow set to 60000ms (max allowed by Binance API).
     adjustForTimeDifference=True enables ccxt to auto-sync with Binance server time.
     """
-    base_config = {
+    base_config: dict[str, object] = {
         "options": {
             "defaultType": "future",
         },
@@ -61,7 +61,7 @@ def _create_exchange() -> ccxt.binanceusdm:
         exchange.set_sandbox_mode(True)
         logger.debug("Exchange: Binance Futures TESTNET")
     else:
-        config = {  # type: ignore[dict-item]
+        config = {
             **base_config,
             "apiKey": settings.BINANCE_API_KEY.get_secret_value() if settings.BINANCE_API_KEY else "",
             "secret": settings.BINANCE_API_SECRET.get_secret_value() if settings.BINANCE_API_SECRET else "",
