@@ -56,7 +56,7 @@ def _get_client(provider: dict) -> openai.OpenAI | None:
 
 # ── Response parser ────────────────────────────────────────────────────────
 
-def _parse_llm_response(raw: str, provider_name: str) -> AnalystDecision:
+def _parse_llm_response(raw: str, provider_name: str) -> AnalystDecision | None:
     """Parse LLM JSON response into AnalystDecision. Never raises."""
     try:
         data = json.loads(raw)
@@ -117,6 +117,9 @@ def _call_provider(provider: dict, prompt: str) -> AnalystDecision | None:
                 max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content
+            if not raw:
+                logger.warning(f"[AnalystAgent] Provider '{name}' returned empty content")
+                return None
             result = _parse_llm_response(raw, name)
             if result is not None:
                 logger.info(f"[AnalystAgent] Provider '{name}' succeeded (action={result.action})")

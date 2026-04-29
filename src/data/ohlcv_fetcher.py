@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import ccxt
 import pandas as pd
+from sqlalchemy import insert
 
 from src.config.settings import settings
 from src.data.storage import OHLCVCandle15m, OHLCVCandleH1, OHLCVCandleH4, get_session
@@ -300,7 +301,7 @@ def fetch_and_store_ohlcv(symbol: str, timeframe: str) -> pd.DataFrame | None:
                 }
                 for _, row in new_candles_df.iterrows()
             ]
-            db.bulk_insert_mappings(model_class, new_candles)
+            db.execute(insert(model_class), new_candles)
             logger.debug(f"Inserted {len(new_candles)} new candles for {symbol} {timeframe}")
         else:
             logger.debug(f"No new candles to insert for {symbol} {timeframe}")

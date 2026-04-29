@@ -192,7 +192,7 @@ def check_trailing_stop(current_prices: dict[str, dict]) -> list[dict]:
 
             trade.sl_price = new_sl
             trade.sl_order_id = new_sl_order_id
-            trade.trailing_step = matched_index
+            trade.trailing_step = matched_index  # type: ignore[assignment]
 
             updated.append({
                 'trade_id': trade.id,

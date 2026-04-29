@@ -25,21 +25,23 @@ def run_concierge(
     Jalankan Concierge Agent. Return raw text langsung.
     """
     try:
+        if not settings.CONCIERGE_API_KEY:
+            raise ValueError("CONCIERGE_API_KEY tidak di-set")
         client = openai.OpenAI(
             api_key=settings.CONCIERGE_API_KEY.get_secret_value(),
             base_url=str(settings.CONCIERGE_BASE_URL).replace('/chat/completions', ''),
             timeout=settings.CONCIERGE_TIMEOUT_SEC,
         )
 
-        messages = [{"role": "system", "content": FREYANA_SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": FREYANA_SYSTEM_PROMPT}]  # type: ignore[list-item]
 
         if trade_context:
-            messages.append({
+            messages.append({  # type: ignore[arg-type]
                 "role": "system",
                 "content": f"DATA TRADING TERKINI:\n{trade_context}"
             })
 
-        messages.append({"role": "user", "content": user_message})
+        messages.append({"role": "user", "content": user_message})  # type: ignore[arg-type]
 
         response = client.chat.completions.create(
             model=settings.CONCIERGE_MODEL,
@@ -50,7 +52,8 @@ def run_concierge(
         )
 
         # Ambil raw text — JANGAN json.loads()
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        return content or "⚠️ Tidak ada response dari Concierge."
 
     except Exception as e:
         logger.error(f"[ConciergeAgent] Error: {e}")

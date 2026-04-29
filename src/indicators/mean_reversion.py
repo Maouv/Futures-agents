@@ -40,7 +40,7 @@ def calculate_mean_reversion(df: pd.DataFrame, rsi_period: int = 14, bb_period: 
 
     # Calculate Bollinger Bands menggunakan pandas-ta
     # pandas-ta mengembalikan DataFrame dengan kolom: BBL_N_S_S, BBM_N_S_S, BBU_N_S_S
-    bb_df = pta.bbands(df['close'], length=bb_period, std=bb_std)
+    bb_df = pta.bbands(df['close'], length=bb_period, std=bb_std)  # type: ignore[arg-type]
 
     # Extract values dari baris terakhir
     # Column names have format: BBL_{length}_{std}_{std}

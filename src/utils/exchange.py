@@ -40,9 +40,9 @@ def _create_exchange() -> ccxt.binanceusdm:
     }
 
     if settings.USE_TESTNET:
-      if not settings.BINANCE_TESTNET_KEY or not settings.BINANCE_TESTNET_SECRET:
-        raise ValueError("BINANCE_TESTNET_KEY dan BINANCE_TESTNET_SECRET set key untuk mode Testnet")
-        config = {
+        if not settings.BINANCE_TESTNET_KEY or not settings.BINANCE_TESTNET_SECRET:
+            raise ValueError("BINANCE_TESTNET_KEY dan BINANCE_TESTNET_SECRET harus di-set untuk mode Testnet")
+        config: dict = {  # type: ignore[arg-type]
             **base_config,
             "apiKey": settings.BINANCE_TESTNET_KEY.get_secret_value(),
             "secret": settings.BINANCE_TESTNET_SECRET.get_secret_value(),

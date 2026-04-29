@@ -35,6 +35,8 @@ ALLOWED_FUNCTIONS = [
 
 
 def run_commander(user_message: str) -> CommanderResult:
+    if not settings.GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY tidak di-set")
     client = openai.OpenAI(
         api_key=settings.GROQ_API_KEY.get_secret_value(),
         base_url=str(settings.GROQ_BASE_URL).replace('/chat/completions', ''),
@@ -59,6 +61,14 @@ Respond in JSON only:
             max_tokens=100,
         )
         raw = response.choices[0].message.content
+        if not raw:
+            logger.warning("[CommanderAgent] LLM returned empty response")
+            return CommanderResult(
+                function_name='unknown',
+                params={},
+                confidence=0,
+                original_message=user_message,
+            )
         data = json.loads(raw)
         fn = data.get('function_name', 'unknown')
         if fn not in ALLOWED_FUNCTIONS:

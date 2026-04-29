@@ -21,3 +21,8 @@ mypy==1.20.2              # Static type checker — catch type bugs sebelum runt
 # TESTING
 # ==========================================
 pytest==8.2.2             # Framework unit test
+
+# ==========================================
+# TYPE STUBS
+# ==========================================
+types-requests==2.32.0    # Type stubs untuk requests library

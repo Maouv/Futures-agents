@@ -142,7 +142,8 @@ class UserDataStream:
                     try:
                         data = json.loads(raw_message)
                     except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON from WS: {raw_message[:200]}")
+                        raw_preview = raw_message[:200].decode("utf-8", errors="replace") if isinstance(raw_message, bytes) else raw_message[:200]
+                        logger.warning(f"Invalid JSON from WS: {raw_preview}")
                         continue
 
                     event = data.get('e', '')
