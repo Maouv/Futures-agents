@@ -10,10 +10,14 @@ from src.config.settings import settings
 from src.utils.logger import logger
 from telegram import Update
 
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Ini dap
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route pesan ke Commander atau Concierge."""
+    if not update.message or not update.effective_chat:
+      return
     message = update.message.text
+    if not message:
+      return
     chat_id = str(update.effective_chat.id)
 
     # Hanya proses dari chat ID yang diizinkan
@@ -117,37 +121,53 @@ def create_bot_app() -> Application:
     return app
 
 
-async def _cmd_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_menu
+    if not update.message:
+      return
     await update.message.reply_text(cmd_menu())
 
-async def _cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_get_status
+    if not update.message:
+      return
     await update.message.reply_text(cmd_get_status())
 
-async def _cmd_trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_get_open_trades
+    if not update.message:
+      return
     await update.message.reply_text(cmd_get_open_trades())
 
-async def _cmd_perf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_perf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_get_performance
+    if not update.message:
+      return
     mode = context.args[0] if context.args else ""
     await update.message.reply_text(cmd_get_performance(mode))
 
-async def _cmd_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_get_trade_history
+    if not update.message:
+      return
     mode = context.args[0] if context.args else ""
     await update.message.reply_text(cmd_get_trade_history(mode))
 
-async def _cmd_kill_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_kill_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_kill
+    if not update.message:
+      return
     await update.message.reply_text(cmd_kill())
 
-async def _cmd_resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_resume
+    if not update.message:
+      return
     await update.message.reply_text(cmd_resume())
 
-async def _cmd_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _cmd_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from src.telegram.commands import cmd_switch_mode
+    if not update.message:
+      return
     mode = context.args[0] if context.args else ""
     await update.message.reply_text(cmd_switch_mode(mode))
