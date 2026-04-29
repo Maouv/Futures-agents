@@ -26,6 +26,8 @@ ALLOWED_FUNCTIONS = [
     'get_open_trades',          # Lihat trades yang open
     'get_trade_history',        # Lihat history trades
     'get_performance',          # Lihat performa (win rate, PnL)
+    'get_stats',                # Stats lengkap per mode (net PnL, fee, win rate)
+    'get_trade_detail',         # Detail satu trade by ID
     'activate_kill_switch',     # Kill switch ON
     'deactivate_kill_switch',   # Kill switch OFF (resume)
     'show_menu',                # Tampilkan menu

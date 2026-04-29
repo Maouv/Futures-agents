@@ -30,7 +30,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Deteksi command vs chat
     is_command = message.startswith('/') or any(
         kw in message.lower()
-        for kw in ['status', 'trades', 'history', 'performance', 'kill', 'resume', 'mode', 'menu']
+        for kw in ['status', 'trades', 'history', 'performance', 'kill', 'resume', 'mode', 'menu', 'stats', 'trade']
     )
 
     if is_command:
@@ -49,7 +49,11 @@ async def _execute_command(result) -> str:
     from src.telegram.commands import COMMAND_HANDLERS
     handler = COMMAND_HANDLERS.get(result.function_name)
     if handler:
-        # Hanya pass 'mode' param yang dikenali oleh get_performance dan get_trade_history
+        # get_trade_detail needs trade_id param
+        if result.function_name == 'get_trade_detail':
+            trade_id = str(result.params.get('trade_id', ''))
+            return handler(trade_id)  # type: ignore[call-arg]
+        # get_performance and get_trade_history need mode param
         mode = result.params.get('mode', '')
         if mode:
             return handler(mode)  # type: ignore[call-arg]

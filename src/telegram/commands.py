@@ -541,6 +541,8 @@ COMMAND_HANDLERS = {
     'get_open_trades': cmd_get_open_trades,
     'get_performance': cmd_get_performance,
     'get_trade_history': cmd_get_trade_history,
+    'get_stats': cmd_stats,
+    'get_trade_detail': cmd_trade_detail,
     'activate_kill_switch': cmd_kill,
     'deactivate_kill_switch': cmd_resume,
     'show_menu': cmd_menu,
