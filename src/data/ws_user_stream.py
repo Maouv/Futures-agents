@@ -296,16 +296,21 @@ class UserDataStream:
             pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
             # ── Fee tracking ───────────────────────────────────────────────
+            # Extract fee_open BEFORE close_trade() — after close_trade the
+            # object may be expired and lazy-loading fails (DetachedInstanceError)
+            fee_open_val = trade.fee_open or 0
+            sl_price_copy = trade.sl_price
+            tp_price_copy = trade.tp_price
+
             actual_close_price = float(order_data.get('ap', 0) or order_data.get('L', 0)) or close_price
             commission_amount = float(order_data.get('n', 0))
             taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
             fee_close = commission_amount if commission_amount > 0 else (
                 float(order_data.get('z', trade.size)) * actual_close_price * taker_fee_rate
             )
-            fee_open_val = trade.fee_open or 0
             net_pnl_val = pnl - fee_open_val - fee_close
             slippage_close_val = actual_close_price - (
-                trade.sl_price if close_reason == 'SL' else trade.tp_price
+                sl_price_copy if close_reason == 'SL' else tp_price_copy
             )
 
             # ── Update Trade di DB ──────────────────────────────────────────
