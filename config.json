@@ -17,7 +17,7 @@
     "leverage": 5,
     "margin_type": "isolated",
     "risk_per_trade_usd": 5.0,
-    "risk_reward_ratio": 1.0,
+    "risk_reward_ratio": 3.0,
     "max_open_positions": 1,
     "order_expiry_candles": 48,
     "disable_session_filter": true,
