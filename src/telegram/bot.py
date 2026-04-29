@@ -46,17 +46,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _execute_command(result) -> str:
     """Eksekusi fungsi berdasarkan CommanderResult."""
+    from typing import Any
+
     from src.telegram.commands import COMMAND_HANDLERS
-    handler = COMMAND_HANDLERS.get(result.function_name)
+    handler: Any = COMMAND_HANDLERS.get(result.function_name)
     if handler:
         # get_trade_detail needs trade_id param
         if result.function_name == 'get_trade_detail':
             trade_id = str(result.params.get('trade_id', ''))
-            return handler(trade_id)  # type: ignore[call-arg]
+            return handler(trade_id)
         # get_performance and get_trade_history need mode param
         mode = result.params.get('mode', '')
         if mode:
-            return handler(mode)  # type: ignore[call-arg]
+            return handler(mode)
         return handler()
     return f"❓ Perintah tidak dikenali: {result.original_message}"
 

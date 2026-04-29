@@ -23,11 +23,11 @@ from collections.abc import Callable
 
 import websockets
 
+from src.config.config_loader import load_trading_config
 from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, get_ws_base_url, reset_exchange
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
-from src.config.config_loader import load_trading_config
 
 # ── Constants ──────────────────────────────────────────────────────────────
 KEEPALIVE_INTERVAL_SEC = 30 * 60   # 30 menit (Binance listen key expires 60 menit)

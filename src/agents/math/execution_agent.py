@@ -23,13 +23,13 @@ from src.agents.math.position_manager import calculate_liquidation_price
 from src.agents.math.reversal_agent import ReversalResult
 from src.agents.math.risk_agent import RiskResult
 from src.agents.math.trend_agent import TrendResult
+from src.config.config_loader import load_trading_config
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, place_algo_order, reset_exchange
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
 from src.utils.mode import get_current_mode
-from src.config.config_loader import load_trading_config
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 # ── SL Retry Constants ────────────────────────────────────────────────────

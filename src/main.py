@@ -32,7 +32,7 @@ from src.data.storage import (
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger, setup_logger
-from src.utils.mode import get_current_mode, get_mode_label, get_mode_emoji, get_mode_tag
+from src.utils.mode import get_current_mode, get_mode_emoji, get_mode_label, get_mode_tag
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 

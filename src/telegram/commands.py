@@ -382,7 +382,7 @@ def cmd_unknown() -> str:
 def _build_stats_for_mode(mode: str, days: int = 30) -> str:
     """Build stats string untuk satu mode."""
     from datetime import timedelta
-    from sqlalchemy import func
+
 
     since = datetime.now(UTC) - timedelta(days=days)
     mode_emoji = {"paper": "📄", "testnet": "🟡", "mainnet": "🟢"}.get(mode, "❓")

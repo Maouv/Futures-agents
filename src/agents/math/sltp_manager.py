@@ -8,11 +8,11 @@ bukan close — jadi paper mode harus mensimulasikan hal yang sama.
 """
 from datetime import UTC, datetime
 
+from src.config.config_loader import load_trading_config
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
-from src.config.config_loader import load_trading_config
 
 
 def check_paper_trades(current_prices: dict[str, dict]) -> list[dict]:

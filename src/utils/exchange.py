@@ -12,6 +12,7 @@ Features:
 - reset_exchange() untuk force recreate saat connection error
 """
 import threading
+from typing import Any
 
 import ccxt
 
@@ -31,7 +32,7 @@ def _create_exchange() -> ccxt.binanceusdm:
     recvWindow set to 60000ms (max allowed by Binance API).
     adjustForTimeDifference=True enables ccxt to auto-sync with Binance server time.
     """
-    base_config: dict[str, object] = {
+    base_config: dict[str, Any] = {
         "options": {
             "defaultType": "future",
         },
