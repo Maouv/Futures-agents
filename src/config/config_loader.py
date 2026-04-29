@@ -238,7 +238,7 @@ def load_trailing_stop_config() -> dict:
     """Load trailing_stop sub-section from config.json with type coercion."""
     trading = load_trading_config()
     default_ts: dict = DEFAULT_TRADING["trailing_stop"]  # type: ignore[assignment]
-    user_ts: dict = trading.get("trailing_stop", {})     # type: ignore[assignment]
+    user_ts: dict = trading.get("trailing_stop", {})
     merged = {**default_ts, **user_ts}
     return _coerce_config(merged, default_ts)
 

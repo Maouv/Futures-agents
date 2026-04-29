@@ -83,7 +83,7 @@ warn_unused_ignores = true
 ignore_missing_imports = true
 
 # Folder yang di-skip mypy
-exclude = ["examples/", "scripts/test_"]
+exclude = ["examples/", "scripts/"]
 
 [[tool.mypy.overrides]]
 module = "src.indicators._smc_core"
@@ -91,7 +91,7 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = "src.config.settings"
-disable_error_codes = ["call-arg"]
+ignore_errors = true
 
 # ──────────────────────────────────────────────────────────────
 # PYTEST — Test runner

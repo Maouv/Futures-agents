@@ -6,6 +6,7 @@ ATURAN KHUSUS Concierge (WAJIB DIPATUHI):
 - Model, API key, dan base URL dikonfigurasi via .env
 """
 import openai
+from openai.types.chat import ChatCompletionMessageParam
 
 from src.config.settings import settings
 from src.utils.logger import logger
@@ -33,15 +34,15 @@ def run_concierge(
             timeout=settings.CONCIERGE_TIMEOUT_SEC,
         )
 
-        messages = [{"role": "system", "content": FREYANA_SYSTEM_PROMPT}]  # type: ignore[list-item]
+        messages: list[ChatCompletionMessageParam] = [{"role": "system", "content": FREYANA_SYSTEM_PROMPT}]
 
         if trade_context:
-            messages.append({  # type: ignore[arg-type]
+            messages.append({
                 "role": "system",
                 "content": f"DATA TRADING TERKINI:\n{trade_context}"
             })
 
-        messages.append({"role": "user", "content": user_message})  # type: ignore[arg-type]
+        messages.append({"role": "user", "content": user_message})
 
         response = client.chat.completions.create(
             model=settings.CONCIERGE_MODEL,

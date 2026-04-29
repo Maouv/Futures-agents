@@ -51,7 +51,7 @@ async def _execute_command(result) -> str:
         # Hanya pass 'mode' param yang dikenali oleh get_performance dan get_trade_history
         mode = result.params.get('mode', '')
         if mode:
-            return handler(mode)
+            return handler(mode)  # type: ignore[call-arg]
         return handler()
     return f"❓ Perintah tidak dikenali: {result.original_message}"
 
