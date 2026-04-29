@@ -12,6 +12,7 @@ from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
+from src.config.config_loader import load_trading_config
 
 
 def check_paper_trades(current_prices: dict[str, dict]) -> list[dict]:
@@ -90,8 +91,18 @@ def check_paper_trades(current_prices: dict[str, dict]) -> list[dict]:
                 # Hitung PnL
                 pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
+                # Fee tracking (paper mode: estimated)
+                taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
+                fee_close = trade.size * close_price * taker_fee_rate
+                fee_open_val = trade.fee_open or 0
+                net_pnl_val = pnl - fee_open_val - fee_close
+
                 # Update trade
                 close_trade(trade, close_reason, close_price, pnl)
+                trade.actual_close_price = close_price  # paper = planned, no slippage
+                trade.slippage_close = 0.0
+                trade.fee_close = fee_close
+                trade.net_pnl = net_pnl_val
 
                 closed.append({
                     'trade_id': trade.id,
@@ -100,6 +111,9 @@ def check_paper_trades(current_prices: dict[str, dict]) -> list[dict]:
                     'entry_price': trade.entry_price,
                     'close_price': close_price,
                     'pnl': pnl,
+                    'net_pnl': net_pnl_val,
+                    'fee_open': fee_open_val,
+                    'fee_close': fee_close,
                     'reason': close_reason,
                 })
 

@@ -9,6 +9,7 @@ SL/TP (Binance server-side di live mode, SLTPManager di paper mode).
 Alasan: "Kalo dah masuk trade, bodo amat mau kena SL atau TP" — biar SL/TP natural.
 """
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from src.config.settings import settings
 from src.data.storage import PaperTrade, get_session
@@ -176,6 +177,8 @@ def cmd_menu() -> str:
         f"\n"
         f"/status  — Mode, leverage, kill switch\n"
         f"/trades  — Open trades (mode aktif)\n"
+        f"/stats   — Stats per mode (net PnL, fee, win rate)\n"
+        f"/trade <id> — Detail satu trade\n"
         f"/history [paper|testnet|mainnet]\n"
         f"/perf [paper|testnet|mainnet]\n"
         f"/mode paper|testnet|mainnet — Switch\n"
@@ -374,6 +377,162 @@ def cmd_switch_mode(mode: str = "") -> str:
 
 def cmd_unknown() -> str:
     return "Perintah tidak dikenali. Ketik /menu"
+
+
+def _build_stats_for_mode(mode: str, days: int = 30) -> str:
+    """Build stats string untuk satu mode."""
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    since = datetime.now(UTC) - timedelta(days=days)
+    mode_emoji = {"paper": "📄", "testnet": "🟡", "mainnet": "🟢"}.get(mode, "❓")
+    mode_label = mode.upper()
+
+    with get_session() as db:
+        closed = db.query(PaperTrade).filter(
+            PaperTrade.execution_mode == mode,
+            PaperTrade.status == 'CLOSED',
+            PaperTrade.entry_timestamp >= since,
+        ).all()
+
+        open_count = db.query(PaperTrade).filter(
+            PaperTrade.execution_mode == mode,
+            PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+        ).count()
+
+    if not closed:
+        return f"{mode_emoji} {mode_label}\nNo closed trades in last {days} days.\n"
+
+    wins = [t for t in closed if (t.net_pnl if t.net_pnl is not None else t.pnl or 0) > 0]
+    losses = [t for t in closed if (t.net_pnl if t.net_pnl is not None else t.pnl or 0) <= 0]
+    win_rate = len(wins) / len(closed) * 100
+
+    gross_pnl = sum(t.pnl or 0 for t in closed)
+    total_fee = sum((t.fee_open or 0) + (t.fee_close or 0) for t in closed)
+    net_pnl = sum(t.net_pnl if t.net_pnl is not None else (t.pnl or 0) for t in closed)
+    avg_net = net_pnl / len(closed)
+
+    sorted_trades = sorted(closed, key=lambda t: t.net_pnl if t.net_pnl is not None else (t.pnl or 0))
+    worst = sorted_trades[0]
+    best = sorted_trades[-1]
+
+    paper_note = " (simulated)" if mode == "paper" else ""
+
+    lines = [
+        f"{mode_emoji} {mode_label} — Last {days} days",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"Closed trades : {len(closed)}",
+        f"Win / Loss    : {len(wins)}W / {len(losses)}L",
+        f"Win Rate      : {win_rate:.1f}%",
+    ]
+
+    if mode != "paper":
+        lines += [
+            f"Gross PnL     : ${gross_pnl:+.2f}",
+            f"Total Fees    : -${total_fee:.4f}",
+        ]
+
+    lines += [
+        f"Net PnL       : ${net_pnl:+.2f}{paper_note}",
+        f"Avg net/trade : ${avg_net:+.2f}",
+        f"Best trade    : ${(best.net_pnl if best.net_pnl is not None else best.pnl or 0):+.2f} ({best.pair})",
+        f"Worst trade   : ${(worst.net_pnl if worst.net_pnl is not None else worst.pnl or 0):+.2f} ({worst.pair})",
+    ]
+
+    if open_count > 0:
+        lines.append(f"\nOpen trades   : {open_count}")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+def cmd_stats(days: int = 30) -> str:
+    """Full stats per mode, current mode first."""
+    current_mode = get_current_mode()
+    msg = "📊 Trading Statistics\n\n"
+    msg += _build_stats_for_mode(current_mode, days)
+    msg += "\n"
+    for mode in ["testnet", "paper", "mainnet"]:
+        if mode != current_mode:
+            section = _build_stats_for_mode(mode, days)
+            if "No closed trades" not in section:
+                msg += section + "\n"
+    return msg
+
+
+def cmd_trade_detail(trade_id_str: str) -> str:
+    """Detail satu trade by ID."""
+    if not trade_id_str.isdigit():
+        return "Usage: /trade <id>"
+
+    trade_id = int(trade_id_str)
+
+    with get_session() as db:
+        trade = db.query(PaperTrade).get(trade_id)
+        if not trade:
+            return f"Trade #{trade_id} tidak ditemukan."
+
+        mode_emoji = {"paper": "📄", "testnet": "🟡", "mainnet": "🟢"}.get(
+            trade.execution_mode or "paper", "❓"
+        )
+
+        duration = ""
+        if trade.close_timestamp and trade.entry_timestamp:
+            delta = trade.close_timestamp - trade.entry_timestamp
+            hours = int(delta.total_seconds() // 3600)
+            minutes = int((delta.total_seconds() % 3600) // 60)
+            duration = f"~{hours}h {minutes}m"
+
+        fee_open = trade.fee_open or 0
+        fee_close = trade.fee_close or 0
+        net_pnl = trade.net_pnl if trade.net_pnl is not None else (trade.pnl or 0)
+        gross_pnl = trade.pnl or 0
+
+        msg = (
+            f"🔍 Trade Detail #{trade.id}\n\n"
+            f"Pair    : {trade.pair}\n"
+            f"Side    : {trade.side}\n"
+            f"Mode    : {mode_emoji} {(trade.execution_mode or 'unknown').upper()}\n"
+            f"Status  : {trade.status}"
+            f"{' (' + trade.close_reason + ')' if trade.close_reason else ''}\n\n"
+        )
+
+        if trade.actual_entry_price:
+            slip = trade.slippage_entry
+            slip_str = f"+${slip:.4f}" if slip and slip >= 0 else (f"${slip:.4f}" if slip else "N/A")
+            msg += (
+                f"Entry\n"
+                f"  Planned : ${trade.entry_price:,.4f}\n"
+                f"  Actual  : ${trade.actual_entry_price:,.4f}\n"
+                f"  Slippage: {slip_str}\n\n"
+            )
+
+        if trade.actual_close_price:
+            planned_close = trade.sl_price if trade.close_reason == 'SL' else trade.tp_price
+            slip_c = trade.slippage_close
+            slip_c_str = f"+${slip_c:.4f}" if slip_c and slip_c >= 0 else (f"${slip_c:.4f}" if slip_c else "N/A")
+            msg += (
+                f"Exit\n"
+                f"  Planned : ${planned_close:,.4f} ({trade.close_reason})\n"
+                f"  Actual  : ${trade.actual_close_price:,.4f}\n"
+                f"  Slippage: {slip_c_str}\n\n"
+            )
+
+        msg += (
+            f"P&L\n"
+            f"  Gross    : ${gross_pnl:+.2f}\n"
+            f"  Fee open : -${fee_open:.4f}\n"
+            f"  Fee close: -${fee_close:.4f}\n"
+            f"  Net PnL  : ${net_pnl:+.2f}\n\n"
+            f"Opened  : {trade.entry_timestamp.strftime('%Y-%m-%d %H:%M UTC') if trade.entry_timestamp else 'N/A'}\n"
+        )
+
+        if trade.close_timestamp:
+            msg += f"Closed  : {trade.close_timestamp.strftime('%Y-%m-%d %H:%M UTC')}\n"
+        if duration:
+            msg += f"Duration: {duration}\n"
+
+        return msg
 
 
 # Registry

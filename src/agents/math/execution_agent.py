@@ -29,6 +29,7 @@ from src.utils.exchange import get_exchange, place_algo_order, reset_exchange
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
 from src.utils.mode import get_current_mode
+from src.config.config_loader import load_trading_config
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 # ── SL Retry Constants ────────────────────────────────────────────────────
@@ -177,6 +178,10 @@ class ExecutionAgent(BaseAgent):
                 is_market = risk_result.entry_adjusted
                 status = 'OPEN' if is_market else 'PENDING_ENTRY'
 
+                # Paper mode: actual = planned (no slippage), fee estimated
+                taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
+                paper_fee_open = risk_result.position_size * risk_result.entry_price * taker_fee_rate
+
                 trade = PaperTrade(
                     pair=symbol,
                     side=reversal_result.signal,
@@ -188,6 +193,9 @@ class ExecutionAgent(BaseAgent):
                     status=status,
                     entry_timestamp=datetime.now(UTC),
                     execution_mode=get_current_mode(),
+                    actual_entry_price=risk_result.entry_price,  # paper = planned, no slippage
+                    slippage_entry=0.0,
+                    fee_open=paper_fee_open,
                 )
                 db.add(trade)
                 db.flush()
@@ -499,6 +507,10 @@ class ExecutionAgent(BaseAgent):
 
             # ── Store OPEN di DB ───────────────────────────────────────────
             liq_price = calculate_liquidation_price(filled_price, reversal_result.signal, risk_result.leverage)
+            taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
+            fee_open_live = float(order.get('fee', {}).get('cost', 0) or 0) or (
+                filled_amount * filled_price * taker_fee_rate
+            )
 
             with get_session() as db:
                 trade = PaperTrade(
@@ -516,6 +528,9 @@ class ExecutionAgent(BaseAgent):
                     sl_order_id=sl_order_id,
                     tp_order_id=tp_order_id,
                     liq_price=liq_price,
+                    actual_entry_price=filled_price,
+                    slippage_entry=filled_price - risk_result.entry_price,
+                    fee_open=fee_open_live,
                 )
                 db.add(trade)
                 db.flush()
@@ -811,6 +826,10 @@ class ExecutionAgent(BaseAgent):
 
         # ── Update DB ──────────────────────────────────────────────────────
         liq_price = calculate_liquidation_price(filled_price, trade_side, trade.get('leverage', 10))
+        taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
+        fee_open_fill = float(order.get('fee', {}).get('cost', 0) or 0) or (
+            filled_amount * filled_price * taker_fee_rate
+        )
 
         with get_session() as db:
             db_trade = db.query(PaperTrade).get(trade_id)
@@ -822,6 +841,9 @@ class ExecutionAgent(BaseAgent):
                 db_trade.tp_order_id = tp_order_id
                 db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
                 db_trade.liq_price = liq_price
+                db_trade.actual_entry_price = filled_price
+                db_trade.slippage_entry = filled_price - trade.get('entry_price', filled_price)
+                db_trade.fee_open = fee_open_fill
 
         self._log(
             f"LIVE TRADE OPENED | ID: {trade_id} | "

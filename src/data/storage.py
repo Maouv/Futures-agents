@@ -90,18 +90,55 @@ class PaperTrade(Base):
     leverage: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(15), nullable=False, default="OPEN")  # 'OPEN', 'CLOSED', 'PENDING_ENTRY', 'EXPIRED'
     pnl: Mapped[float | None] = mapped_column(Float, nullable=True)               # Diisi saat CLOSED
-    entry_timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    close_timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    entry_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    close_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)   # 'TP', 'SL', 'MANUAL', 'EXPIRED', 'RECONCILED', 'EMERGENCY_CLOSE_SL_FAIL', 'MODE_SWITCH'
 
     # ── Live mode columns (nullable, hanya terisi di EXECUTION_MODE='live') ──
-    execution_mode: Mapped[str | None] = mapped_column(String(10), nullable=True, default="paper")  # 'paper', 'testnet', or 'mainnet'
+    execution_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="paper")  # 'paper', 'testnet', or 'mainnet'
     exchange_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Binance entry order ID
     sl_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance SL order ID
     tp_order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)       # Binance TP order ID
     close_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Actual fill price saat SL/TP hit
     trailing_step: Mapped[int] = mapped_column(Integer, nullable=False, default=-1)  # -1=belum trailing, 0+=step index terakhir
     liq_price: Mapped[float | None] = mapped_column(Float, nullable=True)           # Estimasi harga likuidasi
+
+    # ── Actual fill data (dari Binance, bukan kalkulasi bot) ──────────────────
+    actual_entry_price: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Actual fill price dari exchange (vs entry_price yang planned)
+
+    actual_close_price: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Actual close price dari exchange (vs sl_price/tp_price yang planned)
+
+    slippage_entry: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # actual_entry_price - entry_price (negatif = dapat harga lebih baik)
+
+    slippage_close: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # actual_close_price - sl_price atau tp_price
+
+    # ── Fee tracking ──────────────────────────────────────────────────────────
+    fee_open: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Fee saat open position (USDT)
+
+    fee_close: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # Fee saat close position (USDT)
+
+    # ── Net PnL (ini yang sebenarnya masuk kantong) ───────────────────────────
+    net_pnl: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )  # pnl - fee_open - fee_close
+
+    __table_args__ = (
+        Index("ix_paper_trades_status_mode", "status", "execution_mode"),
+        Index("ix_paper_trades_pair_status", "pair", "status"),
+        Index("ix_paper_trades_exchange_order_id", "exchange_order_id"),
+    )
 
 
 class TradeLog(Base):
@@ -144,6 +181,14 @@ def migrate_db() -> None:
         ("paper_trades", "close_price", "FLOAT"),
         ("paper_trades", "trailing_step", "INTEGER DEFAULT -1"),
         ("paper_trades", "liq_price", "FLOAT"),
+        # Phase 1 — actual fill data + fee tracking
+        ("paper_trades", "actual_entry_price", "FLOAT"),
+        ("paper_trades", "actual_close_price", "FLOAT"),
+        ("paper_trades", "slippage_entry", "FLOAT"),
+        ("paper_trades", "slippage_close", "FLOAT"),
+        ("paper_trades", "fee_open", "FLOAT"),
+        ("paper_trades", "fee_close", "FLOAT"),
+        ("paper_trades", "net_pnl", "FLOAT"),
     ]
 
     # Widen close_reason column to fit new reasons (EMERGENCY_CLOSE_SL_FAIL, MODE_SWITCH)
@@ -179,6 +224,20 @@ def migrate_db() -> None:
             except Exception:
                 # Kolom sudah ada — aman untuk di-ignore
                 conn.rollback()
+
+    # Fix existing NULL execution_mode → default 'paper'
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "UPDATE paper_trades SET execution_mode = 'paper' "
+                "WHERE execution_mode IS NULL OR execution_mode = ''"
+            ))
+            conn.commit()
+            updated = result.rowcount
+            if updated > 0:
+                logger.info(f"Migration: Fixed {updated} trades with NULL execution_mode → 'paper'")
+    except Exception as e:
+        logger.warning(f"Migration: Could not fix NULL execution_mode: {e}")
 
     logger.info("Database migration completed.")
 

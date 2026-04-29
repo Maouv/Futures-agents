@@ -15,6 +15,26 @@ def get_mode_label() -> str:
     return get_current_mode().upper()
 
 
+def get_mode_emoji() -> str:
+    """Return emoji label per mode untuk Telegram notification."""
+    mode = get_current_mode()
+    return {
+        "paper": "📄",
+        "testnet": "🟡",
+        "mainnet": "🟢",
+    }.get(mode, "❓")
+
+
+def get_mode_tag() -> str:
+    """Return text tag per mode untuk Telegram notification."""
+    mode = get_current_mode()
+    return {
+        "paper": "[PAPER]",
+        "testnet": "[TESTNET]",
+        "mainnet": "[MAINNET]",
+    }.get(mode, "[UNKNOWN]")
+
+
 def init_mode() -> None:
     """Initialize and log execution mode at startup."""
     mode = get_current_mode()

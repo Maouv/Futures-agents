@@ -115,6 +115,8 @@ def create_bot_app() -> Application:
     app.add_handler(CommandHandler("kill", _cmd_kill_handler))
     app.add_handler(CommandHandler("resume", _cmd_resume_handler))
     app.add_handler(CommandHandler("mode", _cmd_mode_handler))
+    app.add_handler(CommandHandler("stats", _cmd_stats_handler))
+    app.add_handler(CommandHandler("trade", _cmd_trade_detail_handler))
 
     # Natural language messages (via Commander/Concierge)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -172,3 +174,16 @@ async def _cmd_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
       return
     mode = context.args[0] if context.args else ""
     await update.message.reply_text(cmd_switch_mode(mode))
+
+async def _cmd_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src.telegram.commands import cmd_stats
+    if not update.message:
+        return
+    await update.message.reply_text(cmd_stats())
+
+async def _cmd_trade_detail_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from src.telegram.commands import cmd_trade_detail
+    if not update.message:
+        return
+    trade_id = context.args[0] if context.args else ""
+    await update.message.reply_text(cmd_trade_detail(trade_id))

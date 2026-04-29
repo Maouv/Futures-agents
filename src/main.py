@@ -32,7 +32,7 @@ from src.data.storage import (
 from src.telegram.bot import create_bot_app, send_notification
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger, setup_logger
-from src.utils.mode import get_current_mode, get_mode_label
+from src.utils.mode import get_current_mode, get_mode_label, get_mode_emoji, get_mode_tag
 from src.utils.trade_utils import calculate_pnl, close_trade
 
 
@@ -155,14 +155,14 @@ class TradingBot:
                         if result.action == 'OPEN':
                             overlap_tag = " [OVERLAP]" if risk.entry_adjusted else ""
                             self.send_notification_sync(
-                                f"{get_mode_label()} {decision.action} | {symbol}{overlap_tag}\n"
+                                f"{get_mode_emoji()} {get_mode_tag()} {decision.action} | {symbol}{overlap_tag}\n"
                                 f"Entry: ${risk.entry_price:,.2f}\n"
                                 f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                                 f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
                             )
                         elif result.action == 'PENDING':
                             self.send_notification_sync(
-                                f"{get_mode_label()} {decision.action} PENDING | {symbol}\n"
+                                f"{get_mode_emoji()} {get_mode_tag()} {decision.action} PENDING | {symbol}\n"
                                 f"Limit @ ${risk.entry_price:,.2f}\n"
                                 f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
                                 f"Waiting for fill..."
@@ -192,11 +192,17 @@ class TradingBot:
         closed = check_paper_trades(current_prices)
 
         for trade in closed:
-            emoji = "✅" if trade['pnl'] > 0 else "❌"
+            net_pnl = trade.get('net_pnl', trade['pnl'])
+            emoji = "✅" if net_pnl > 0 else "❌"
+            fee_total = trade.get('fee_open', 0) + trade.get('fee_close', 0)
+            fee_line = f"Fee: -${fee_total:.4f}\n" if fee_total > 0 else ""
             self.send_notification_sync(
-                f"{emoji} {trade['reason']} Hit\n"
+                f"{emoji} {get_mode_tag()} {trade['reason']} Hit\n"
                 f"{trade['pair']} {trade['side']}\n"
-                f"PnL: ${trade['pnl']:.2f}"
+                f"Entry: ${trade['entry_price']:,.4f} → Close: ${trade['close_price']:,.4f}\n"
+                f"Gross PnL: ${trade['pnl']:+.2f}\n"
+                f"{fee_line}"
+                f"Net PnL: ${net_pnl:+.2f}"
             )
 
     def _run_paper_pending_check(self, current_prices: dict):
@@ -322,11 +328,18 @@ class TradingBot:
         """Handle notification dari WS thread — bridge ke Telegram."""
         if data.get('event') == 'trade_closed':
             trade = data
-            emoji = "+" if trade.get('pnl', 0) > 0 else "-"
+            pnl = trade.get('pnl', 0)
+            net_pnl = trade.get('net_pnl', pnl)
+            fee_total = trade.get('fee_open', 0) + trade.get('fee_close', 0)
+            emoji = "✅" if net_pnl > 0 else "❌"
+            fee_line = f"Fee: -${fee_total:.4f}\n" if fee_total > 0 else ""
             self.send_notification_sync(
-                f"{emoji} LIVE {trade['close_reason']} Hit\n"
+                f"{emoji} {get_mode_tag()} {trade['close_reason']} Hit\n"
                 f"{trade['pair']} {trade['side']}\n"
-                f"Close: ${trade.get('close_price', 0):,.2f} | PnL: ${trade.get('pnl', 0):.2f}"
+                f"Close: ${trade.get('close_price', 0):,.4f}\n"
+                f"Gross PnL: ${pnl:+.2f}\n"
+                f"{fee_line}"
+                f"Net PnL: ${net_pnl:+.2f}"
             )
 
     @staticmethod

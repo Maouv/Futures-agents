@@ -27,6 +27,7 @@ from src.data.storage import PaperTrade, get_session
 from src.utils.exchange import get_exchange, get_ws_base_url, reset_exchange
 from src.utils.logger import logger
 from src.utils.trade_utils import calculate_pnl, close_trade
+from src.config.config_loader import load_trading_config
 
 # ── Constants ──────────────────────────────────────────────────────────────
 KEEPALIVE_INTERVAL_SEC = 30 * 60   # 30 menit (Binance listen key expires 60 menit)
@@ -294,8 +295,25 @@ class UserDataStream:
 
             pnl = calculate_pnl(trade.side, trade.entry_price, close_price, trade.size)
 
+            # ── Fee tracking ───────────────────────────────────────────────
+            actual_close_price = float(order_data.get('ap', 0) or order_data.get('L', 0)) or close_price
+            commission_amount = float(order_data.get('n', 0))
+            taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
+            fee_close = commission_amount if commission_amount > 0 else (
+                float(order_data.get('z', trade.size)) * actual_close_price * taker_fee_rate
+            )
+            fee_open_val = trade.fee_open or 0
+            net_pnl_val = pnl - fee_open_val - fee_close
+            slippage_close_val = actual_close_price - (
+                trade.sl_price if close_reason == 'SL' else trade.tp_price
+            )
+
             # ── Update Trade di DB ──────────────────────────────────────────
             close_trade(trade, close_reason, close_price, pnl)
+            trade.actual_close_price = actual_close_price
+            trade.slippage_close = slippage_close_val
+            trade.fee_close = fee_close
+            trade.net_pnl = net_pnl_val
 
             # ── Extract attributes sebelum session close ────────────────────
             # Mencegah DetachedInstanceError saat akses di luar `with` block
@@ -325,6 +343,9 @@ class UserDataStream:
                     'close_reason': close_reason,
                     'close_price': close_price,
                     'pnl': pnl,
+                    'net_pnl': net_pnl_val,
+                    'fee_open': fee_open_val,
+                    'fee_close': fee_close,
                 })
             except Exception as e:
                 logger.error(f"Notification callback error: {e}")
