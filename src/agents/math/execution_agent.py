@@ -11,6 +11,9 @@ LIVE MODE:
 - Setiap cycle, cek apakah limit order sudah FILLED
 - Jika FILLED → pasang SL + TP, update status='OPEN'
 - Jika EXPIRED (ORDER_EXPIRY_CANDLES tercapai) → cancel order, status='EXPIRED'
+
+Pending order monitoring di-delegate ke OrderMonitor.
+Shared utilities (send_alert, set_account_params, count_open_positions) via ExecutionMixin.
 """
 import time
 from datetime import UTC, datetime
@@ -19,6 +22,7 @@ import ccxt
 from pydantic import BaseModel
 
 from src.agents.math.base_agent import BaseAgent
+from src.agents.math.execution_utils import ExecutionMixin
 from src.agents.math.position_manager import calculate_liquidation_price
 from src.agents.math.reversal_agent import ReversalResult
 from src.agents.math.risk_agent import RiskResult
@@ -30,7 +34,6 @@ from src.utils.exchange import get_exchange, place_algo_order, reset_exchange
 from src.utils.kill_switch import check_kill_switch
 from src.utils.logger import logger
 from src.utils.mode import get_current_mode
-from src.utils.trade_utils import calculate_pnl, close_trade
 
 # ── SL Retry Constants ────────────────────────────────────────────────────
 SL_MAX_RETRIES = 3
@@ -44,12 +47,16 @@ class ExecutionResult(BaseModel):
     trade_id: int | None = None  # ID dari paper_trades
 
 
-class ExecutionAgent(BaseAgent):
+class ExecutionAgent(ExecutionMixin, BaseAgent):
     """
     Eksekusi trade berdasarkan hasil analisis.
 
     PAPER MODE: INSERT ke database paper_trades (status='OPEN')
     LIVE MODE: LIMIT order di OB midpoint, lalu monitor hingga FILLED
+
+    Shared utilities (send_alert, set_account_params, count_open_positions)
+    disediakan oleh ExecutionMixin.
+    Pending order monitoring di-delegate ke OrderMonitor.
     """
 
     def __init__(self, notification_callback=None):
@@ -60,15 +67,8 @@ class ExecutionAgent(BaseAgent):
         """
         super().__init__()
         self._notification_callback = notification_callback
-
-    def _send_alert(self, message: str) -> None:
-        """Kirim alert via callback kalau tersedia, selalu log juga."""
-        self._log_error(message)
-        if self._notification_callback:
-            try:
-                self._notification_callback(message)
-            except Exception as e:
-                logger.error(f"Failed to send alert notification: {e}")
+        # Lazy-init OrderMonitor — dibuat saat pertama kali check_pending_orders dipanggil
+        self._order_monitor = None
 
     def run(
         self,
@@ -573,290 +573,19 @@ class ExecutionAgent(BaseAgent):
 
     def check_pending_orders(self) -> list:
         """
-        Cek semua PENDING_ENTRY trades — apakah sudah FILLED atau EXPIRED.
-        Dipanggil setiap cycle oleh main loop.
-        Hanya berjalan di live mode — paper mode tidak punya Binance orders.
+        Delegate ke OrderMonitor.check_pending_orders().
 
-        Returns:
-            List of dict dengan info aksi yang diambil per trade.
+        Backward-compatible: semua caller (main.py, ws_user_stream.py) tetap
+        memanggil method ini di ExecutionAgent tanpa perlu diubah.
         """
-        results: list[dict] = []
-
-        # Paper mode tidak punya pending Binance orders
-        if settings.EXECUTION_MODE != "live":
-            return results
-
-        mode = get_current_mode()
-
-        with get_session() as db:
-            pending_trades = (
-                db.query(PaperTrade)
-                .filter(
-                    PaperTrade.status == 'PENDING_ENTRY',
-                    PaperTrade.execution_mode == mode,
-                )
-                .all()
+        from src.agents.math.order_monitor import OrderMonitor  # noqa: PLC0415
+        if self._order_monitor is None:
+            self._order_monitor = OrderMonitor(
+                notification_callback=self._notification_callback
             )
+        return self._order_monitor.check_pending_orders()
 
-            for trade in pending_trades:
-                # Extract ke dict SEBELUM session close untuk menghindari DetachedInstanceError
-                trade_data = {
-                    'id': trade.id,
-                    'pair': trade.pair,
-                    'side': trade.side,
-                    'entry_price': trade.entry_price,
-                    'sl_price': trade.sl_price,
-                    'tp_price': trade.tp_price,
-                    'size': trade.size,
-                    'leverage': trade.leverage,
-                    'exchange_order_id': trade.exchange_order_id,
-                    'entry_timestamp': trade.entry_timestamp,
-                }
-                result = self._check_single_pending(trade_data)
-                results.append(result)
-
-        return results
-
-    def _check_single_pending(self, trade: dict) -> dict:
-        """
-        Cek satu pending trade: sudah filled, expired, atau masih menunggu?
-        Menerima dict (bukan PaperTrade) untuk menghindari DetachedInstanceError.
-        """
-        exchange = get_exchange()
-        trade_id = trade['id']
-        trade_pair = trade['pair']
-        trade_exchange_order_id = trade['exchange_order_id']
-        result = {"trade_id": trade_id, "pair": trade_pair, "action": "none"}
-
-        try:
-            # ── Cek Order Status di Binance ────────────────────────────────
-            order = exchange.fetch_order(trade_exchange_order_id, trade_pair)
-            order_status = order.get('status', 'unknown')
-
-            if order_status in ('filled', 'closed'):
-                result = self._handle_fill(trade, order, exchange)
-
-            elif order_status == 'canceled' or order_status == 'expired':
-                # Order di-cancel secara eksternal — update DB
-                with get_session() as db:
-                    db_trade = db.query(PaperTrade).get(trade_id)
-                    if db_trade:
-                        db_trade.status = 'EXPIRED'
-                        db_trade.close_reason = 'EXPIRED'
-                        db_trade.close_timestamp = datetime.now(UTC)
-
-                self._log(f"Order {trade_exchange_order_id} canceled/expired externally")
-                result["action"] = "expired"
-
-            elif order_status == 'open':
-                # Masih menunggu — cek kadaluarsa
-                entry_ts = trade['entry_timestamp']
-                # Handle naive datetime dari SQLite
-                if entry_ts.tzinfo is None:
-                    entry_ts = entry_ts.replace(tzinfo=UTC)
-                hours_elapsed = (datetime.now(UTC) - entry_ts).total_seconds() / 3600
-                candles_elapsed = hours_elapsed  # 1 candle H1 = 1 jam
-                candles_remaining = settings.ORDER_EXPIRY_CANDLES - candles_elapsed
-
-                if candles_elapsed >= settings.ORDER_EXPIRY_CANDLES:
-                    # Kadaluarsa — cancel order di Binance
-                    try:
-                        exchange.cancel_order(trade_exchange_order_id, trade_pair)
-                        self._log(
-                            f"Limit order EXPIRED after {candles_elapsed:.1f} H1 candles | "
-                            f"Trade {trade_id} | Order {trade_exchange_order_id}"
-                        )
-                    except ccxt.OrderNotFound:
-                        self._log(f"Order {trade_exchange_order_id} already gone — treating as expired")
-                    except Exception as e:
-                        self._log_error(f"Failed to cancel expired order {trade_exchange_order_id}: {e}")
-
-                    with get_session() as db:
-                        db_trade = db.query(PaperTrade).get(trade_id)
-                        if db_trade:
-                            db_trade.status = 'EXPIRED'
-                            db_trade.close_reason = 'EXPIRED'
-                            db_trade.close_timestamp = datetime.now(UTC)
-
-                    result["action"] = "expired"
-                else:
-                    self._log(
-                        f"Pending order still waiting | Trade {trade_id} | "
-                        f"{candles_remaining:.1f} H1 candles remaining"
-                    )
-                    result["action"] = "waiting"
-
-            else:
-                self._log_error(
-                    f"Unknown order status '{order_status}' for trade {trade_id}"
-                )
-
-        except ccxt.OrderNotFound:
-            self._log_error(f"Order {trade_exchange_order_id} not found on exchange")
-            with get_session() as db:
-                db_trade = db.query(PaperTrade).get(trade_id)
-                if db_trade:
-                    db_trade.status = 'EXPIRED'
-                    db_trade.close_reason = 'EXPIRED'
-                    db_trade.close_timestamp = datetime.now(UTC)
-            result["action"] = "expired"
-
-        except Exception as e:
-            self._log_error(f"Error checking pending order {trade_id}: {e}")
-            result["action"] = "error"
-
-        return result
-
-    def _handle_fill(self, trade: dict, order: dict, exchange) -> dict:
-        """
-        Limit order sudah FILLED — pasang SL + TP di Binance.
-        Ini momen paling kritis: kalau SL gagal setelah retry, emergency close posisi.
-        Menerima dict (bukan PaperTrade) untuk menghindari DetachedInstanceError.
-        """
-        result = {"trade_id": trade['id'], "pair": trade['pair'], "action": "filled"}
-        filled_price = float(order.get('average', order.get('price', trade['entry_price'])))
-        filled_amount = float(order.get('filled', trade['size']))
-
-        # Extract attributes dari dict
-        trade_id = trade['id']
-        trade_pair = trade['pair']
-        trade_side = trade['side']
-        trade_sl_price = trade['sl_price']
-        trade_tp_price = trade['tp_price']
-
-        close_side = 'sell' if trade_side == 'LONG' else 'buy'
-
-        # ── Place SL (stop_market) via Algo API with retry ───────────────────
-        # Sejak Des 2025, Binance migrasi conditional orders ke Algo Order API.
-        # Endpoint: POST /fapi/v1/algoOrder (algoType=CONDITIONAL, type=STOP_MARKET)
-        sl_order_id = None
-        for attempt in range(1, SL_MAX_RETRIES + 1):
-            try:
-                sl_result = place_algo_order(
-                    symbol=trade_pair,
-                    side=close_side,
-                    order_type='STOP_MARKET',
-                    trigger_price=trade_sl_price,
-                    quantity=filled_amount,
-                    reduce_only=True,
-                )
-                sl_order_id = str(sl_result.get('algoId', ''))
-                self._log(f"SL algo order placed | ID: {sl_order_id} | Trigger: {trade_sl_price:.2f}")
-                break
-            except Exception as e:
-                self._log_error(
-                    f"SL order attempt {attempt}/{SL_MAX_RETRIES} FAILED for trade {trade_id}: {e}"
-                )
-                if attempt < SL_MAX_RETRIES:
-                    backoff = SL_RETRY_BACKOFF_BASE ** attempt
-                    self._log(f"Retrying SL in {backoff}s...")
-                    time.sleep(backoff)
-
-        # ── SL gagal total → Emergency Market Close ────────────────────────
-        if sl_order_id is None:
-            self._log_error(
-                f"CRITICAL: SL order FAILED after {SL_MAX_RETRIES} retries for trade {trade_id}! "
-                f"Emergency closing position to prevent unprotected exposure."
-            )
-            emergency_close_price = None
-            try:
-                close_order = exchange.create_order(
-                    symbol=trade_pair,
-                    type='market',
-                    side=close_side,
-                    amount=exchange.amount_to_precision(trade_pair, filled_amount),
-                    params={'reduceOnly': True}
-                )
-                emergency_close_price = float(close_order.get('average', close_order.get('price', filled_price)))
-                self._log(f"Emergency close executed at {emergency_close_price:.2f}")
-            except Exception as e2:
-                self._log_error(f"EMERGENCY CLOSE ALSO FAILED: {e2}. Manual intervention required!")
-                emergency_close_price = filled_price  # fallback
-
-            # Hitung PnL dari emergency close
-            emergency_pnl = calculate_pnl(trade_side, filled_price, emergency_close_price, filled_amount)
-
-            with get_session() as db:
-                db_trade = db.query(PaperTrade).get(trade_id)
-                if db_trade:
-                    close_trade(db_trade, 'EMERGENCY_CLOSE_SL_FAIL', emergency_close_price, emergency_pnl)
-                    db_trade.entry_price = filled_price
-                    db_trade.size = filled_amount
-                    db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
-
-            self._log(
-                f"TRADE EMERGENCY CLOSED | ID: {trade_id} | "
-                f"{trade_pair} {trade_side} | "
-                f"Entry: {filled_price:.2f} | Close: {emergency_close_price:.2f} | "
-                f"PnL: ${emergency_pnl:.2f} | Reason: SL_FAIL"
-            )
-            result["action"] = "emergency_closed"
-            return result
-
-        # ── Place TP (take_profit_market) via Algo API with retry ───────────
-        tp_order_id = None
-        for attempt in range(1, SL_MAX_RETRIES + 1):
-            try:
-                tp_result = place_algo_order(
-                    symbol=trade_pair,
-                    side=close_side,
-                    order_type='TAKE_PROFIT_MARKET',
-                    trigger_price=trade_tp_price,
-                    quantity=filled_amount,
-                    reduce_only=True,
-                )
-                tp_order_id = str(tp_result.get('algoId', ''))
-                self._log(f"TP algo order placed | ID: {tp_order_id} | Trigger: {trade_tp_price:.2f}")
-                break
-            except Exception as e:
-                self._log_error(
-                    f"TP order attempt {attempt}/{SL_MAX_RETRIES} FAILED for trade {trade_id}: {e}"
-                )
-                if attempt < SL_MAX_RETRIES:
-                    backoff = SL_RETRY_BACKOFF_BASE ** attempt
-                    self._log(f"Retrying TP in {backoff}s...")
-                    time.sleep(backoff)
-
-        if tp_order_id is None:
-            self._send_alert(
-                f"⚠️ TP GAGAL setelah {SL_MAX_RETRIES} retry | Trade {trade_id} | {trade_pair}\n"
-                f"SL @ {trade_sl_price:.4f} masih aktif.\n"
-                f"→ Manual TP perlu dipasang di Binance!"
-            )
-
-        # ── Update DB ──────────────────────────────────────────────────────
-        liq_price = calculate_liquidation_price(filled_price, trade_side, trade.get('leverage', 10))
-        taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
-        fee_open_fill = float(order.get('fee', {}).get('cost', 0) or 0) or (
-            filled_amount * filled_price * taker_fee_rate
-        )
-
-        with get_session() as db:
-            db_trade = db.query(PaperTrade).get(trade_id)
-            if db_trade:
-                db_trade.status = 'OPEN'
-                db_trade.entry_price = filled_price
-                db_trade.size = filled_amount
-                db_trade.sl_order_id = sl_order_id
-                db_trade.tp_order_id = tp_order_id
-                db_trade.exchange_order_id = str(order.get('id', trade.get('exchange_order_id')))
-                db_trade.liq_price = liq_price
-                db_trade.actual_entry_price = filled_price
-                db_trade.slippage_entry = filled_price - trade.get('entry_price', filled_price)
-                db_trade.fee_open = fee_open_fill
-
-        self._log(
-            f"LIVE TRADE OPENED | ID: {trade_id} | "
-            f"{trade_pair} {trade_side} | "
-            f"Entry: {filled_price:.2f} | "
-            f"SL: {trade_sl_price:.2f} | TP: {trade_tp_price:.2f} | "
-            f"Liq: ${liq_price:.2f} | "
-            f"SL_Order: {sl_order_id} | TP_Order: {tp_order_id}"
-        )
-
-        return result
-
-    def _handle_ccxt_error(self, e: Exception, context: str = "execution") -> ExecutionResult:
+    def _handle_ccxt_error(self, e: Exception, context: str = "execution") -> "ExecutionResult":
         """Unified ccxt error handler — returns SKIP ExecutionResult."""
         if isinstance(e, ccxt.InsufficientFunds):
             self._log_error(f"Insufficient funds: {e}")
@@ -874,39 +603,3 @@ class ExecutionAgent(BaseAgent):
         self._log_error(f"Unexpected error in {context}: {e}")
         return ExecutionResult(action="SKIP", reason=f"Error: {str(e)}")
 
-    def _set_account_params(self, exchange, symbol: str, leverage: int) -> None:
-        """Set leverage dan margin mode untuk symbol. Error ditoleransi (sudah diset sebelumnya)."""
-        try:
-            exchange.set_leverage(leverage, symbol)
-            self._log(f"Leverage set to {leverage}x for {symbol}")
-        except ccxt.ExchangeError as e:
-            # Biasanya karena sudah diset — toleransi
-            if "No need to change leverage" in str(e) or "leverage not changed" in str(e).lower():
-                self._log(f"Leverage already {leverage}x for {symbol}")
-            else:
-                self._log_error(f"Failed to set leverage: {e}")
-                raise
-
-        try:
-            exchange.set_margin_mode(settings.FUTURES_MARGIN_TYPE, symbol)
-        except ccxt.ExchangeError as e:
-            if "No need to change margin type" in str(e) or "margin type not changed" in str(e).lower():
-                self._log(f"Margin mode already {settings.FUTURES_MARGIN_TYPE} for {symbol}")
-            else:
-                self._log_error(f"Failed to set margin mode: {e}")
-                raise
-
-    def _count_open_positions(self, symbol: str) -> int:
-        """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY), filtered by current mode."""
-        mode = get_current_mode()
-        with get_session() as db:
-            count = (
-                db.query(PaperTrade)
-                .filter(
-                    PaperTrade.pair == symbol,
-                    PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
-                    PaperTrade.execution_mode == mode,
-                )
-                .count()
-            )
-        return count

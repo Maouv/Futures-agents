@@ -16,6 +16,7 @@ from loguru import logger
 from src.agents.math.confirmation_agent import ConfirmationAgent
 from src.agents.math.reversal_agent import ReversalAgent
 from src.agents.math.trend_agent import TrendAgent
+from src.backtest._engine_helpers import build_trade_result, check_exit_conditions
 from src.backtest.metrics import BacktestMetrics, TradeResult, calculate_metrics
 from src.config.settings import settings
 from src.indicators.helpers import calculate_atr
@@ -322,8 +323,6 @@ class BacktestEngine:
 
         return metrics
 
-    # ── Exit check ───────────────────────────────────────────────────────────
-
     def _check_exit(
         self,
         position: dict,
@@ -333,39 +332,16 @@ class BacktestEngine:
         current_time: int,
         i: int,
     ) -> dict | None:
-        """
-        FIX Bug #3: Cek exit menggunakan HIGH/LOW candle, bukan close price.
-        Ini lebih realistis — SL/TP bisa kena di tengah candle.
-
-        Catatan: jika dalam 1 candle baik TP maupun SL bisa kena (spike),
-        kita asumsikan SL yang kena dulu (worst case, lebih konservatif).
-        """
-        side      = position['side']
-        tp_price  = position['tp_price']
-        sl_price  = position['sl_price']
-        entry_idx = position['entry_index']
-
-        candles_held = i - entry_idx
-
-        if side == "LONG":
-            # Worst case: cek SL dulu
-            if candle_low <= sl_price:
-                return {'price': sl_price, 'reason': 'SL'}
-            if candle_high >= tp_price:
-                return {'price': tp_price, 'reason': 'TP'}
-        else:  # SHORT
-            if candle_high >= sl_price:
-                return {'price': sl_price, 'reason': 'SL'}
-            if candle_low <= tp_price:
-                return {'price': tp_price, 'reason': 'TP'}
-
-        # Timeout
-        if candles_held >= MAX_HOLD_CANDLES:
-            return {'price': current_close, 'reason': 'TIMEOUT'}
-
-        return None
-
-    # ── Close position ───────────────────────────────────────────────────────
+        """Delegate ke check_exit_conditions() di _engine_helpers."""
+        return check_exit_conditions(
+            position=position,
+            candle_high=candle_high,
+            candle_low=candle_low,
+            current_close=current_close,
+            current_time=current_time,
+            i=i,
+            max_hold_candles=MAX_HOLD_CANDLES,
+        )
 
     def _close_position(
         self,
@@ -375,54 +351,14 @@ class BacktestEngine:
         exit_reason: str,
         exit_index: int,
     ) -> TradeResult:
-        """
-        Hitung PnL dengan slippage dan fee dinamis.
-
-        Fee formula: position_size × price × fee_rate (per side)
-        """
-        entry_price = position['entry_price']
-        side        = position['side']
-        size        = position['size']
-
-        # Apply slippage
-        if side == "LONG":
-            actual_entry = entry_price * (1 + self.slippage)
-            actual_exit  = exit_price  * (1 - self.slippage)
-            pnl = (actual_exit - actual_entry) * size
-        else:
-            actual_entry = entry_price * (1 - self.slippage)
-            actual_exit  = exit_price  * (1 + self.slippage)
-            pnl = (actual_entry - actual_exit) * size
-
-        # Fee dinamis: (qty × harga) × tarif — dua sisi
-        fee_entry = size * actual_entry * self.fee_rate
-        fee_exit  = size * actual_exit  * self.fee_rate
-        total_fee = fee_entry + fee_exit
-
-        net_pnl     = pnl - total_fee
-        pnl_percent = (net_pnl / position['balance_at_entry']) * 100
-
-        # Calculate candles held
-        candles_held = exit_index - position['entry_index']
-
-        return TradeResult(
-            entry_time=position['entry_time'],
+        """Delegate ke build_trade_result() di _engine_helpers."""
+        return build_trade_result(
+            position=position,
+            exit_price=exit_price,
             exit_time=exit_time,
-            entry_price=actual_entry,
-            exit_price=actual_exit,
-            side=side,
-            size=size,
-            pnl=net_pnl,
-            pnl_percent=pnl_percent,
-            fee=total_fee,
             exit_reason=exit_reason,
-            sl_price=position['sl_price'],
-            tp_price=position['tp_price'],
-            candles_held=candles_held,
-            atr=position.get('atr', 0.0),
-            ob_high=position.get('ob_high', 0.0),
-            ob_low=position.get('ob_low', 0.0),
-            trend_bias=position.get('trend_bias', 'RANGING'),
-            confidence=position.get('confidence', 0),
+            exit_index=exit_index,
+            fee_rate=self.fee_rate,
+            slippage=self.slippage,
+            balance_at_entry=position['balance_at_entry'],
         )
-
