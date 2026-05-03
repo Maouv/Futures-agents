@@ -13,7 +13,8 @@ ExecutionResult yang akan bikin circular import.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import ccxt
 
@@ -36,7 +37,7 @@ class ExecutionMixin:
       - self._log() / self._log_error() dari BaseAgent
     """
     # Type hints untuk attribute yang disediakan oleh subclass (BaseAgent + __init__)
-    _notification_callback: Optional[Callable[[str], None]]
+    _notification_callback: Callable[[str], None] | None
 
     def _log(self, message: str) -> None: ...  # implemented by BaseAgent
     def _log_error(self, message: str) -> None: ...  # implemented by BaseAgent
