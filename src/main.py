@@ -48,6 +48,8 @@ class TradingBot:
         self.pairs = load_pairs()
         self._ws_stream = None  # User Data Stream (live mode only)
         self._execution_agent = ExecutionAgent()  # Reusable instance
+        # Dedup: track pairs yang sudah kirim notif PENDING di cycle ini (reset per cycle)
+        self._pending_notif_sent: set[str] = set()
 
     def send_notification_sync(self, message: str):
         """
@@ -88,10 +90,19 @@ class TradingBot:
             pending_results = self._execution_agent.check_pending_orders()
             for r in pending_results:
                 if r.get('action') == 'filled':
+                    # Order filled → hapus dari dedup set agar bisa notif open baru
+                    self._pending_notif_sent.discard(r.get('pair', ''))
                     self.send_notification_sync(
                         f"LIVE order FILLED → SL/TP placed\n"
                         f"Trade {r['trade_id']} | {r['pair']}"
                     )
+                elif r.get('action') == 'expired':
+                    # Order expired → juga hapus dari dedup agar cycle berikutnya bisa notif
+                    self._pending_notif_sent.discard(r.get('pair', ''))
+
+            # ── Cleanup orphaned algo orders per cycle ─────────────────────
+            # Jaga kebersihan: cancel SL/TP yang tidak punya trade OPEN di DB
+            self._cleanup_orphaned_algo_orders()
 
         # Kumpulkan harga terbaru dari setiap pair untuk SLTP check
         current_prices = {}
@@ -161,12 +172,23 @@ class TradingBot:
                                 f"Risk: ${risk.risk_usd:.2f} | RR: 1:{settings.RISK_REWARD_RATIO}"
                             )
                         elif result.action == 'PENDING':
-                            self.send_notification_sync(
-                                f"{get_mode_emoji()} {get_mode_tag()} {decision.action} PENDING | {symbol}\n"
-                                f"Limit @ ${risk.entry_price:,.2f}\n"
-                                f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
-                                f"Waiting for fill..."
-                            )
+                            # Kirim notif hanya jika ini trade PENDING pertama untuk pair ini
+                            # (cek via trade_id: jika result.trade_id ada dan ini trade baru)
+                            # Gunakan trade_id sebagai dedup key agar notif hanya terkirim
+                            # 1x per trade, bukan 1x per cycle
+                            trade_key = f"{symbol}:{result.trade_id}"
+                            if trade_key not in self._pending_notif_sent:
+                                self._pending_notif_sent.add(trade_key)
+                                self.send_notification_sync(
+                                    f"{get_mode_emoji()} {get_mode_tag()} {decision.action} PENDING | {symbol}\n"
+                                    f"Limit @ ${risk.entry_price:,.2f}\n"
+                                    f"SL: ${risk.sl_price:,.2f} | TP: ${risk.tp_price:,.2f}\n"
+                                    f"Waiting for fill..."
+                                )
+                            else:
+                                logger.info(
+                                    f"{symbol}: Trade {result.trade_id} PENDING notif sudah terkirim — skip."
+                                )
                     else:
                         logger.info(f"{symbol}: No OB available for entry. Skipping.")
                 else:
@@ -299,6 +321,11 @@ class TradingBot:
         # Buat event loop untuk main thread
         self.event_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.event_loop)
+
+        # ── Startup Cleanup orphaned algo orders (live mode) ───────────────
+        # Dipanggil setelah event loop ready agar notif Telegram bisa terkirim
+        if settings.EXECUTION_MODE == "live":
+            self._cleanup_orphaned_algo_orders()
 
         # Scheduler — jalankan di background thread
         self.scheduler = BackgroundScheduler()
@@ -505,6 +532,78 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Position reconciliation failed: {e}")
             logger.warning("Proceeding without reconciliation — monitor manually!")
+
+    def _cleanup_orphaned_algo_orders(self) -> None:
+        """
+        Cancel semua algo orders (TP/SL) di Binance yang tidak punya trade OPEN di DB.
+
+        Dipanggil sekali saat startup (live mode) untuk membersihkan accumulated
+        conditional orders yang tertinggal dari trade-trade yang sudah expired/closed.
+
+        Root cause: Setiap kali trade baru di-place → TP+SL algo order baru dibuat.
+        Jika trade expired/closed tapi counter-order tidak ter-cancel, orders menumpuk.
+        """
+        from src.utils.exchange import cancel_algo_order, get_open_algo_orders
+        from src.data.storage import PaperTrade, get_session
+        from src.utils.mode import get_current_mode
+
+        logger.debug("Checking for orphaned algo orders (TP/SL)...")
+        mode = get_current_mode()
+        total_cancelled = 0
+        total_errors = 0
+
+        for pair in self.pairs:
+            try:
+                # Fetch open algo orders untuk pair ini
+                open_algos = get_open_algo_orders(pair)
+                if not open_algos:
+                    continue
+
+                # Cek apakah pair ini punya trade OPEN di DB
+                with get_session() as db:
+                    has_open_trade = db.query(PaperTrade).filter(
+                        PaperTrade.pair == pair,
+                        PaperTrade.status == 'OPEN',
+                        PaperTrade.execution_mode == mode,
+                    ).count() > 0
+
+                if has_open_trade:
+                    logger.debug(
+                        f"{pair}: {len(open_algos)} algo orders — trade OPEN di DB, biarkan."
+                    )
+                    continue
+
+                # Tidak ada trade OPEN → semua algo orders adalah orphan
+                logger.warning(
+                    f"{pair}: {len(open_algos)} orphaned algo orders ditemukan "
+                    f"(tidak ada trade OPEN di DB) — akan di-cancel."
+                )
+
+                for algo in open_algos:
+                    algo_id = str(algo.get('algoId', ''))
+                    algo_type = algo.get('type', algo.get('algoType', 'UNKNOWN'))
+                    if not algo_id:
+                        continue
+                    try:
+                        cancel_algo_order(algo_id, pair)
+                        logger.info(f"Cancelled orphaned {algo_type} | algoId: {algo_id} | {pair}")
+                        total_cancelled += 1
+                    except Exception as e:
+                        logger.error(f"Failed to cancel algo {algo_id} for {pair}: {e}")
+                        total_errors += 1
+
+            except Exception as e:
+                logger.error(f"Error checking algo orders for {pair}: {e}")
+
+        if total_cancelled > 0:
+            msg = (
+                f"🧹 Cleanup: {total_cancelled} orphaned algo orders cancelled"
+                + (f", {total_errors} errors (check logs)" if total_errors > 0 else "")
+            )
+            logger.warning(msg)
+            self.send_notification_sync(msg)
+        elif total_errors > 0:
+            logger.error(f"Cleanup: {total_errors} algo order cancel errors — check logs.")
 
     def _check_mode_switch_trades(self) -> None:
         """

@@ -240,8 +240,8 @@ def cancel_algo_order(
     response = http_requests.delete(url, headers=headers, timeout=10)
 
     result = response.json()
-    if response.status_code != 200 or ('code' in result and result.get('code') != 200):
-        msg = result.get('msg', str(result))
+    if response.status_code != 200:
+        msg = result.get('msg', str(result)) if isinstance(result, dict) else str(result)
         if 'Unknown order' in msg or 'Order does not exist' in msg:
             logger.debug(f"Algo order {algo_order_id} already gone: {msg}")
             return result  # bukan error, lanjut
@@ -299,6 +299,9 @@ def get_open_algo_orders(symbol: str) -> list:
     if response.status_code != 200:
         raise ccxt.ExchangeError(f"get_open_algo_orders failed: {result}")
 
+    # Binance bisa return list langsung atau {"orders": [...]}
+    if isinstance(result, list):
+        return result
     return result.get('orders', [])
 
 

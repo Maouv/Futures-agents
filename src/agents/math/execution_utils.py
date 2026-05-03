@@ -74,14 +74,14 @@ class ExecutionMixin:
                 raise
 
     def _count_open_positions(self, symbol: str) -> int:
-        """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY), filtered by current mode."""
+        """Hitung jumlah posisi yang sedang terbuka untuk satu pair (OPEN + PENDING_ENTRY + PENDING_SUBMIT), filtered by current mode."""
         mode = get_current_mode()
         with get_session() as db:
             count = (
                 db.query(PaperTrade)
                 .filter(
                     PaperTrade.pair == symbol,
-                    PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY']),
+                    PaperTrade.status.in_(['OPEN', 'PENDING_ENTRY', 'PENDING_SUBMIT']),
                     PaperTrade.execution_mode == mode,
                 )
                 .count()

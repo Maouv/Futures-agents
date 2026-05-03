@@ -113,6 +113,17 @@ class OrderMonitor(ExecutionMixin, BaseAgent):
         result = {"trade_id": trade_id, "pair": trade_pair, "action": "none"}
 
         try:
+            # ── Idempotency Guard ──────────────────────────────────────────
+            # Kalau trade sudah OPEN di DB (race condition: WS sempat update duluan),
+            # skip _handle_fill agar tidak re-place SL/TP duplikat.
+            with get_session() as db:
+                current = db.query(PaperTrade).get(trade_id)
+                if current and current.status == 'OPEN':
+                    self._log(
+                        f"Trade {trade_id} sudah OPEN di DB — skip (idempotency guard)"
+                    )
+                    return {"trade_id": trade_id, "pair": trade_pair, "action": "none"}
+
             # ── Cek Order Status di Binance ────────────────────────────────
             order = exchange.fetch_order(trade_exchange_order_id, trade_pair)
             order_status = order.get('status', 'unknown')
@@ -311,7 +322,8 @@ class OrderMonitor(ExecutionMixin, BaseAgent):
         # ── Update DB ──────────────────────────────────────────────────────
         liq_price = calculate_liquidation_price(filled_price, trade_side, trade.get('leverage', 10))
         taker_fee_rate = load_trading_config().get("taker_fee_rate", 0.0004)
-        fee_open_fill = float(order.get('fee', {}).get('cost', 0) or 0) or (
+        fee_info = order.get('fee') or {}  # guard: 'fee' key bisa ada tapi nilainya None
+        fee_open_fill = float(fee_info.get('cost', 0) or 0) or (
             filled_amount * filled_price * taker_fee_rate
         )
 

@@ -65,8 +65,8 @@
       {
         "name": "fallback_openai",
         "api_key_env": "fallback_api_key",
-        "base_url": "https://api.cerebras.ai/v1",
-        "model": "qwen-3-235b-a22b-instruct-2507",
+        "base_url": "https://ai.sumopod.com/v1",
+        "model": "zai/glm-4.7-fp8",
         "rpm": 30,
         "min_interval": 3.0,
         "max_concurrent": 1,

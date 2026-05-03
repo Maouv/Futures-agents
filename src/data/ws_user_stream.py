@@ -225,6 +225,7 @@ class UserDataStream:
         # Fallback: match by symbol + order type for SL/TP fills.
         with get_session() as db:
             # Cek apakah ini SL, TP, atau entry order
+            # Note: SL/TP selalu match trade dengan status OPEN
             trade = (
                 db.query(PaperTrade)
                 .filter(
@@ -253,6 +254,34 @@ class UserDataStream:
                     logger.info(
                         f"Matched algo order by symbol+side | Order {order_id} -> Trade {trade.id} ({symbol})"
                     )
+
+            # ── Race Condition Fix: Entry LIMIT filled sebelum DB update ke PENDING_ENTRY ──
+            # Terjadi ketika order filled dalam milidetik setelah placed.
+            # execution_agent._execute_live_limit() Step 3 belum selesai update DB,
+            # tapi WS sudah fire FILLED event. Cari juga di PENDING_SUBMIT/PENDING_ENTRY.
+            if trade is None and order_type == 'LIMIT':
+                trade = (
+                    db.query(PaperTrade)
+                    .filter(
+                        PaperTrade.status.in_(['PENDING_SUBMIT', 'PENDING_ENTRY']),
+                        PaperTrade.pair == symbol,
+                        (PaperTrade.exchange_order_id == order_id) |
+                        (PaperTrade.exchange_order_id == None)  # noqa: E711 — PENDING_SUBMIT belum punya order_id
+                    )
+                    .order_by(PaperTrade.id.desc())
+                    .first()
+                )
+                if trade:
+                    logger.info(
+                        f"Race condition detected: LIMIT filled before DB update | "
+                        f"Order {order_id} -> Trade {trade.id} ({symbol}, status={trade.status})"
+                    )
+                    # Update exchange_order_id di DB agar check_pending_orders bisa fetch & proses
+                    if trade.exchange_order_id != order_id:
+                        trade.exchange_order_id = order_id
+                        logger.info(
+                            f"Updated exchange_order_id for trade {trade.id}: None -> {order_id}"
+                        )
 
             if trade is None:
                 logger.debug(f"No matching OPEN trade for order {order_id}")
