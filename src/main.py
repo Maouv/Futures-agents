@@ -543,8 +543,8 @@ class TradingBot:
         Root cause: Setiap kali trade baru di-place → TP+SL algo order baru dibuat.
         Jika trade expired/closed tapi counter-order tidak ter-cancel, orders menumpuk.
         """
-        from src.utils.exchange import cancel_algo_order, get_open_algo_orders
         from src.data.storage import PaperTrade, get_session
+        from src.utils.exchange import cancel_algo_order, get_open_algo_orders
         from src.utils.mode import get_current_mode
 
         logger.debug("Checking for orphaned algo orders (TP/SL)...")

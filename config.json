@@ -25,9 +25,9 @@
     "trailing_stop": {
       "enabled": true,
       "steps": [
-        {"profit_pct": 1.0, "new_sl_pct": 0.0},
-        {"profit_pct": 2.0, "new_sl_pct": 0.5},
-        {"profit_pct": 3.0, "new_sl_pct": 1.0}
+        {"profit_pct": 0.5, "new_sl_pct": 0.0},
+        {"profit_pct": 1.0, "new_sl_pct": 0.5},
+        {"profit_pct": 2.0, "new_sl_pct": 1.0}
       ]
     }
   },
@@ -66,7 +66,7 @@
         "name": "fallback_openai",
         "api_key_env": "fallback_api_key",
         "base_url": "https://ai.sumopod.com/v1",
-        "model": "zai/glm-4.7-fp8",
+        "model": "qwen/qwen3-30b-a3b-instruct-2507",
         "rpm": 30,
         "min_interval": 3.0,
         "max_concurrent": 1,
